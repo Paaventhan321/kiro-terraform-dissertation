@@ -21,14 +21,24 @@ def classify_failures(checkov_results):
         "MEDIUM": [],
         "LOW": []
     }
-    failed = checkov_results.get("results", {}).get("failed_checks", [])
+    
+    failed = checkov_results.get(
+        "results", {}
+    ).get("failed_checks", [])
+    
     for check in failed:
         severity = check.get("severity", "LOW")
+        
+        # Fix None severity
+        if severity is None or severity not in classified:
+            severity = "LOW"
+            
         classified[severity].append({
             "check_id": check.get("check_id"),
             "check_name": check.get("check_name"),
             "resource": check.get("resource")
         })
+    
     return classified, len(failed)
 
 def build_prompt(terraform_code, failures):
