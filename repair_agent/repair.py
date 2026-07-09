@@ -37,26 +37,34 @@ def classify_failures(checkov_results):
     return classified, len(failed)
 
 def build_prompt(terraform_code, failures):
-    findings_text = json.dumps(failures, indent=2)
+    # Only fix HIGH and CRITICAL issues
+    simple_failures = {
+        "CRITICAL": failures.get("CRITICAL", []),
+        "HIGH": failures.get("HIGH", [])
+    }
+    
+    # Skip complex fixes like replication and notifications
+    findings_text = json.dumps(simple_failures, indent=2)
+    
     return f"""
-You are an AWS Terraform security expert specialising in
-CIS Benchmark and AWS security best practices.
+You are an AWS Terraform security expert.
 
-The following Terraform code has security issues detected
-by Checkov security scanner:
+The following Terraform code has security issues:
 
 TERRAFORM CODE:
 {terraform_code}
 
-SECURITY FINDINGS:
+SECURITY FINDINGS TO FIX:
 {findings_text}
 
 YOUR TASK:
-1. Fix ALL security issues listed above
-2. Do not change any functionality
-3. Follow AWS security best practices
-4. Return ONLY valid HCL Terraform code
-5. No explanations, no markdown, no code blocks
+1. Fix ONLY the CRITICAL and HIGH severity issues
+2. Do NOT add Lambda functions or complex resources
+3. Do NOT add cross-region replication
+4. Do NOT add event notifications requiring Lambda
+5. Keep changes minimal and focused
+6. Return ONLY valid HCL Terraform code
+7. No explanations, no markdown, no code blocks
 """
 
 def call_repair_agent(prompt):
