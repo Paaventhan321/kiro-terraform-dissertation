@@ -21,24 +21,19 @@ def classify_failures(checkov_results):
         "MEDIUM": [],
         "LOW": []
     }
-    
     failed = checkov_results.get(
         "results", {}
     ).get("failed_checks", [])
-    
+
     for check in failed:
         severity = check.get("severity", "LOW")
-        
-        # Fix None severity
         if severity is None or severity not in classified:
             severity = "LOW"
-            
         classified[severity].append({
             "check_id": check.get("check_id"),
             "check_name": check.get("check_name"),
             "resource": check.get("resource")
         })
-    
     return classified, len(failed)
 
 def build_prompt(terraform_code, failures):
@@ -65,34 +60,40 @@ YOUR TASK:
 """
 
 def call_repair_agent(prompt):
-    # Gets API key from environment variable - never hardcode it
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        print("No API key found. Skipping repair.")
+        print("No OpenAI API key found. Skipping repair.")
         return None
 
     headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
 
     body = {
-        "model": "claude-sonnet-4-6",
-        "max_tokens": 2000,
+        "model": "gpt-4o-mini",
         "messages": [
-            {"role": "user", "content": prompt}
-        ]
+            {
+                "role": "system",
+                "content": "You are an AWS Terraform security expert. Return only valid HCL Terraform code with no explanations or markdown."
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "max_tokens": 2000,
+        "temperature": 0.1
     }
 
     response = requests.post(
-        "https://api.anthropic.com/v1/messages",
+        "https://api.openai.com/v1/chat/completions",
         headers=headers,
         json=body
     )
 
     if response.status_code == 200:
-        return response.json()["content"][0]["text"]
+        return response.json()["choices"][0]["message"]["content"]
     else:
         print(f"API Error: {response.status_code}")
         print(response.text)
