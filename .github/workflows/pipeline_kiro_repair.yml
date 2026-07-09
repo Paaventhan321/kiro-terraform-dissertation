@@ -1,4 +1,4 @@
-name: Terraform CI/CD Pipeline - Manual
+name: Terraform CI/CD Pipeline - Kiro + Repair
 
 on:
   push:
@@ -35,6 +35,13 @@ jobs:
         pip install checkov
         checkov -d terraform --output json > results/checkov_results.json || true
         checkov -d terraform || true
+
+    - name: Run Repair Agent
+      env:
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      run: python repair_agent/repair.py
 
     - name: Terraform Plan
       run: terraform plan
