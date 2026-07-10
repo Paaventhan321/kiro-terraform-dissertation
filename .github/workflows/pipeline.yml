@@ -1,4 +1,4 @@
-name: Terraform CI/CD Pipeline - Kiro + Repair
+name: Terraform CI/CD Pipeline - Kiro Only
 
 on:
   push:
@@ -36,11 +36,6 @@ jobs:
         checkov -d terraform --output json > results/checkov_results.json || true
         checkov -d terraform || true
 
-    - name: Run Repair Agent
-      env:
-        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      run: python repair_agent/repair.py
-
     - name: Terraform Plan
       run: terraform plan
       working-directory: terraform
@@ -48,4 +43,3 @@ jobs:
     - name: Terraform Apply
       run: terraform apply -auto-approve
       working-directory: terraform
-# S3-C 07/10/2026 20:44:33
