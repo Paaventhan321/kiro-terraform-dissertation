@@ -1,4 +1,4 @@
-# Scenario 3 - Condition A - Manual - SSH Open to Internet
+# Scenario 3 - Condition B - Kiro - Security Group Web Server
 terraform {
   required_providers {
     aws = {
@@ -12,9 +12,9 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_security_group" "s3_manual" {
-  name_prefix = "manual-s3-"
-  description = "Web server security group"
+resource "aws_security_group" "s3_kiro_web" {
+  name        = "kiro-s3-web-sg"
+  description = "Security group for web server"
 
   ingress {
     description = "SSH from anywhere"
@@ -33,6 +33,7 @@ resource "aws_security_group" "s3_manual" {
   }
 
   egress {
+    description = "Allow all outbound traffic"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -41,6 +42,6 @@ resource "aws_security_group" "s3_manual" {
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S3-Manual"
+    Scenario = "S3-Kiro"
   }
 }
