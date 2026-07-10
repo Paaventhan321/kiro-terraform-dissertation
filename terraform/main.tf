@@ -13,7 +13,7 @@ provider "aws" {
 }
 
 resource "aws_security_group" "s3_kiro_web" {
-  name        = "kiro-s3-web-sg"
+  name_prefix = "kiro-s3-"
   description = "Security group for web server"
 
   ingress {

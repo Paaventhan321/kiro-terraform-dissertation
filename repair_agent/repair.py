@@ -37,15 +37,11 @@ def classify_failures(checkov_results):
     return classified, len(failed)
 
 def build_prompt(terraform_code, failures):
-    # Only fix HIGH and CRITICAL issues
     simple_failures = {
         "CRITICAL": failures.get("CRITICAL", []),
         "HIGH": failures.get("HIGH", [])
     }
-    
-    # Skip complex fixes like replication and notifications
     findings_text = json.dumps(simple_failures, indent=2)
-    
     return f"""
 You are an AWS Terraform security expert.
 
@@ -59,9 +55,9 @@ SECURITY FINDINGS TO FIX:
 
 YOUR TASK:
 1. Fix ONLY the CRITICAL and HIGH severity issues
-2. Do NOT add Lambda functions or complex resources
-3. Do NOT add cross-region replication
-4. Do NOT add event notifications requiring Lambda
+2. Do NOT use placeholder values like YOUR_IP_ADDRESS
+3. Use 10.0.0.0/8 for restricted SSH CIDR blocks
+4. Do NOT add Lambda functions or complex resources
 5. Keep changes minimal and focused
 6. Return ONLY valid HCL Terraform code
 7. No explanations, no markdown, no code blocks
