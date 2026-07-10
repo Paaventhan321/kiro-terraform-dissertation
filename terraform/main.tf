@@ -1,4 +1,4 @@
-# Scenario 2 - Condition B - Kiro - S3 Intentionally Misconfigured setup
+# Scenario 2 - Condition B - Kiro - S3 Intentionally Misconfigured setupa j .
 terraform {
   required_providers {
     aws = {
