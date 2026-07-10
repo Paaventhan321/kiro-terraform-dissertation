@@ -20,3 +20,4 @@ resource "aws_s3_bucket" "s2_kiro" {
     Scenario = "S2-Kiro"
   }
 }
+
