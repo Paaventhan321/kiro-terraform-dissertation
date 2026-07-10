@@ -13,7 +13,7 @@ provider "aws" {
 }
 
 resource "aws_security_group" "s3_manual" {
-  name        = "manual-s3-sg"
+  name_pref   = "manual-s3-"
   description = "Web server security group"
 
   ingress {
