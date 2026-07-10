@@ -1,4 +1,4 @@
-# Scenario 2 - Condition B - Kiro - S3 Intentionally Misconfigured setupa j .
+# Scenario 3 - Condition A - Manual - SSH Open to Internet
 terraform {
   required_providers {
     aws = {
@@ -12,12 +12,35 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_s3_bucket" "s2_kiro" {
-  bucket_prefix = "kiro-s2-"
+resource "aws_security_group" "s3_manual" {
+  name        = "manual-s3-web-sg"
+  description = "Web server security group"
+
+  ingress {
+    description = "SSH from anywhere"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "HTTP from anywhere"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S2-Kiro"
+    Scenario = "S3-Manual"
   }
 }
-
