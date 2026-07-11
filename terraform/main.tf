@@ -1,4 +1,4 @@
-# Scenario 4 - Condition B - Kiro - EC2 Intentionally Misconfigured
+# Scenario 3 - Condition B - Kiro - Security Group Web Server
 terraform {
   required_providers {
     aws = {
@@ -12,27 +12,36 @@ provider "aws" {
   region = "us-east-1"
 }
 
-data "aws_ami" "amazon_linux_2023" {
-  most_recent = true
-  owners      = ["amazon"]
+resource "aws_security_group" "s3_kiro_web" {
+  name_prefix = "kiro-s3-"
+  description = "Security group for web server"
 
-  filter {
-    name   = "name"
-    values = ["al2023-ami-*-x86_64"]
+  ingress {
+    description = "SSH from anywhere"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
+  ingress {
+    description = "HTTP from anywhere"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
-}
 
-resource "aws_instance" "s4_kiro" {
-  ami           = data.aws_ami.amazon_linux_2023.id
-  instance_type = "t2.micro"
+  egress {
+    description = "Allow all outbound traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S4-Kiro"
+    Scenario = "S3-Kiro"
   }
 }

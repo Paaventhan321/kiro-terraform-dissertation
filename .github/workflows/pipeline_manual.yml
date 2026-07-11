@@ -2,7 +2,7 @@ name: Terraform CI/CD Pipeline - Manual
 
 on:
   push:
-    branches: [ main ]
+    branches: [ condition-a ]
 
 jobs:
   terraform-pipeline:

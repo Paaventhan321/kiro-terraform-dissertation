@@ -2,7 +2,7 @@ name: Terraform CI/CD Pipeline - Kiro Only
 
 on:
   push:
-    branches: [ main ]
+    branches: [ condition-b ]
 
 jobs:
   terraform-pipeline:
