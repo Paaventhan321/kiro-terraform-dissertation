@@ -1,4 +1,5 @@
-# Scenario 3 - Condition B - Kiro - Security Group Web Server
+
+# Scenario 4 - Condition A - Manual - EC2 No IAM Role
 terraform {
   required_providers {
     aws = {
@@ -12,36 +13,21 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_security_group" "s3_kiro_web" {
-  name_prefix = "kiro-s3-"
-  description = "Security group for web server"
-
-  ingress {
-    description = "SSH from anywhere"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+data "aws_ami" "amazon_linux" {
+  most_recent = true
+  owners      = ["amazon"]
+  filter {
+    name   = "name"
+    values = ["al2023-ami-*-x86_64"]
   }
+}
 
-  ingress {
-    description = "HTTP from anywhere"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    description = "Allow all outbound traffic"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+resource "aws_instance" "s4_manual" {
+  ami           = data.aws_ami.amazon_linux.id
+  instance_type = "t2.micro"
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S3-Kiro"
+    Scenario = "S4-Manual"
   }
 }
