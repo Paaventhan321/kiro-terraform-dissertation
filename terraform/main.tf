@@ -1,4 +1,4 @@
-# Scenario 4 - Condition C - Kiro with repair agent- EC2 No IAM
+# Scenario 4 - Condition C - Kiro with repair agent-C- EC2 No IAM
 terraform {
   required_providers {
     aws = {
