@@ -1,4 +1,4 @@
-# Scenario 3 - Condition B - Kiro - Security Group Web Server list 
+# Scenario 3 - Condition B - Kiro - Security Group Web Server
 terraform {
   required_providers {
     aws = {
