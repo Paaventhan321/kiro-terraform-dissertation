@@ -1,4 +1,4 @@
-# Scenario 4 - Condition C - Kiro + Repair-agent- EC2 Intentionally Misconfigured
+# Scenario 4 - Condition C - Kiro with repair agent- EC2 No IAM
 terraform {
   required_providers {
     aws = {
@@ -12,27 +12,21 @@ provider "aws" {
   region = "us-east-1"
 }
 
-data "aws_ami" "amazon_linux_2023" {
+data "aws_ami" "amazon_linux" {
   most_recent = true
   owners      = ["amazon"]
-
   filter {
     name   = "name"
     values = ["al2023-ami-*-x86_64"]
   }
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
 }
 
-resource "aws_instance" "s5_kiro" {
-  ami           = data.aws_ami.amazon_linux_2023.id
+resource "aws_instance" "s4_kiro" {
+  ami           = data.aws_ami.amazon_linux.id
   instance_type = "t2.micro"
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S5-Kiro"
+    Scenario = "S4-Kiro"
   }
 }
