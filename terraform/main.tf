@@ -1,4 +1,4 @@
-# Scenario 7 - Condition B - Kiro - Lambda Intentionally Misconfigured
+# Scenario 8 - Condition B - Kiro - VPC Intentionally Misconfigured
 terraform {
   required_providers {
     aws = {
@@ -12,49 +12,44 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_iam_role" "s7_kiro_lambda" {
-  name_prefix = "kiro-s7-"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect    = "Allow"
-        Principal = { Service = "lambda.amazonaws.com" }
-        Action    = "sts:AssumeRole"
-      }
-    ]
-  })
+resource "aws_vpc" "s8_kiro" {
+  cidr_block = "10.0.0.0/16"
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S7-Kiro"
+    Scenario = "S8-Kiro"
   }
 }
 
-resource "aws_iam_role_policy_attachment" "s7_kiro_lambda_basic" {
-  role       = aws_iam_role.s7_kiro_lambda.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-}
-
-resource "aws_lambda_function" "s7_kiro" {
-  function_name = "kiro-s7-lambda"
-  role          = aws_iam_role.s7_kiro_lambda.arn
-  runtime       = "python3.11"
-  handler       = "lambda_function.lambda_handler"
-  filename      = "lambda_function.zip"
-
-  environment {
-    variables = {
-      APP_ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"
-      APP_SECRET_KEY = "wJalrXUtnFEMI12345KEY"
-      DB_PASSWORD    = "SuperSecret123!"
-      API_TOKEN      = "hardcoded-secret-token-12345"
-    }
-  }
+resource "aws_subnet" "s8_kiro_public" {
+  vpc_id            = aws_vpc.s8_kiro.id
+  cidr_block        = "10.0.1.0/24"
+  availability_zone = "us-east-1a"
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S7-Kiro"
+    Scenario = "S8-Kiro"
+    Type     = "public"
+  }
+}
+
+resource "aws_subnet" "s8_kiro_private" {
+  vpc_id            = aws_vpc.s8_kiro.id
+  cidr_block        = "10.0.2.0/24"
+  availability_zone = "us-east-1b"
+
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S8-Kiro"
+    Type     = "private"
+  }
+}
+
+resource "aws_internet_gateway" "s8_kiro" {
+  vpc_id = aws_vpc.s8_kiro.id
+
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S8-Kiro"
   }
 }
