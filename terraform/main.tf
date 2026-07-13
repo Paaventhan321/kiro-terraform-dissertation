@@ -1,4 +1,4 @@
-# Scenario 6 - Condition A - Manual - IAM Admin
+# Scenario 7 - Condition A - Manual - Lambda Hardcoded Credentials
 terraform {
   required_providers {
     aws = {
@@ -12,9 +12,8 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_iam_role" "s6_manual" {
-  name_prefix = "manual-s6-"
-  description = "Dissertation test role with admin access"
+resource "aws_iam_role" "s7_manual_lambda" {
+  name_prefix = "manual-s7-lambda-"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -22,18 +21,34 @@ resource "aws_iam_role" "s6_manual" {
       Action    = "sts:AssumeRole"
       Effect    = "Allow"
       Principal = {
-        Service = "ec2.amazonaws.com"
+        Service = "lambda.amazonaws.com"
       }
     }]
   })
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S6-Manual"
+    Scenario = "S7-Manual"
   }
 }
 
-resource "aws_iam_role_policy_attachment" "s6_manual" {
-  role       = aws_iam_role.s6_manual.name
-  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+resource "aws_lambda_function" "s7_manual" {
+  filename      = "lambda_function.zip"
+  function_name = "manual-s7-lambda"
+  role          = aws_iam_role.s7_manual_lambda.arn
+  handler       = "index.handler"
+  runtime       = "python3.11"
+
+  environment {
+    variables = {
+      AWS_ACCESS_KEY_ID     = "AKIAIOSFODNN7EXAMPLE"
+      AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+      DB_PASSWORD           = "SuperSecret123!"
+    }
+  }
+
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S7-Manual"
+  }
 }
