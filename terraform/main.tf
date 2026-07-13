@@ -1,4 +1,4 @@
-# Scenario 5 - Condition c - Kiro with repair - RDS Public
+# Scenario 6 - Condition C - Kiro with repair - IAM Admin
 terraform {
   required_providers {
     aws = {
@@ -12,22 +12,28 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_db_instance" "s5_kiro" {
-  identifier        = "kiro-s5-db"
-  engine            = "mysql"
-  engine_version    = "8.0"
-  instance_class    = "db.t3.micro"
-  allocated_storage = 20
-  username          = "admin"
-  password          = "TempPass123!"
+resource "aws_iam_role" "s6_kiro" {
+  name_prefix = "kiro-s6-"
+  description = "Dissertation test role with admin access"
 
-  publicly_accessible = true
-  skip_final_snapshot = true
-  deletion_protection = false
-  storage_encrypted   = false
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = {
+        Service = "ec2.amazonaws.com"
+      }
+    }]
+  })
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S5-Kiro"
+    Scenario = "S6-Kiro"
   }
+}
+
+resource "aws_iam_role_policy_attachment" "s6_kiro" {
+  role       = aws_iam_role.s6_kiro.name
+  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
 }
