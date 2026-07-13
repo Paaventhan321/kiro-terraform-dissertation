@@ -13,7 +13,7 @@ provider "aws" {
 }
 
 resource "aws_iam_role" "s7_kiro_lambda" {
-  name = "kiro-s7-lambda-role"
+  name_prefix = "kiro-s7-"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
