@@ -1,4 +1,4 @@
-# Scenario 8 - Condition B - Kiro - VPC No Flow Logs
+# Scenario 9 - Condition B - Kiro - Multi-Resource Intentionally Misconfigured
 terraform {
   required_providers {
     aws = {
@@ -12,43 +12,83 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_vpc" "s8_kiro" {
-  cidr_block           = "10.0.0.0/16"
-  enable_dns_hostnames = true
-  enable_dns_support   = true
+# S3 Bucket - no encryption
+resource "aws_s3_bucket" "s9_kiro" {
+  bucket_prefix = "kiro-s9-"
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S8-Kiro"
+    Scenario = "S9-Kiro"
   }
 }
 
-resource "aws_subnet" "s8_kiro_public" {
-  vpc_id                  = aws_vpc.s8_kiro.id
-  cidr_block              = "10.0.1.0/24"
-  map_public_ip_on_launch = true
+# Security Group - SSH and HTTP open to the world
+resource "aws_security_group" "s9_kiro_web" {
+  name        = "kiro-s9-web-sg"
+  description = "Security group for web server"
+
+  ingress {
+    description = "SSH from anywhere"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "HTTP from anywhere"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description = "Allow all outbound traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S8-Kiro-Public"
+    Scenario = "S9-Kiro"
   }
 }
 
-resource "aws_subnet" "s8_kiro_private" {
-  vpc_id     = aws_vpc.s8_kiro.id
-  cidr_block = "10.0.2.0/24"
+# IAM Role - AdministratorAccess
+resource "aws_iam_role" "s9_kiro_ec2" {
+  name = "kiro-s9-ec2-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Service = "ec2.amazonaws.com" }
+        Action    = "sts:AssumeRole"
+      }
+    ]
+  })
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S8-Kiro-Private"
+    Scenario = "S9-Kiro"
   }
 }
 
-resource "aws_internet_gateway" "s8_kiro" {
-  vpc_id = aws_vpc.s8_kiro.id
+resource "aws_iam_role_policy_attachment" "s9_kiro_admin" {
+  role       = aws_iam_role.s9_kiro_ec2.name
+  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+}
+
+# VPC - no flow logs
+resource "aws_vpc" "s9_kiro" {
+  cidr_block = "10.9.0.0/16"
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S8-Kiro-IGW"
+    Scenario = "S9-Kiro"
   }
 }
