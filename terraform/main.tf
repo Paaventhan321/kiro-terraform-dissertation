@@ -1,4 +1,4 @@
-# Scenario 9 - Condition B - Kiro - Multi-Resource Intentionally Misconfigured
+# Scenario 9 - Condition c - Kiro - Multi-Resource Intentionally Misconfigured
 terraform {
   required_providers {
     aws = {
