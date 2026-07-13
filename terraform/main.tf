@@ -1,4 +1,4 @@
-# Scenario 5 - Condition A - Manual - RDS Public Access
+# Scenario 6 - Condition A - Manual - IAM Admin
 terraform {
   required_providers {
     aws = {
@@ -12,22 +12,44 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_db_instance" "s5_manual" {
-  identifier        = "manual-s5-db"
-  engine            = "mysql"
-  engine_version    = "8.0"
-  instance_class    = "db.t3.micro"
-  allocated_storage = 20
-  username          = "admin"
-  password          = "TempPass123!"
+resource "aws_iam_role" "s6_manual" {
+  name_prefix = "manual-s6-"
+  description = "Dissertation test role with admin access"
 
-  publicly_accessible = true
-  skip_final_snapshot = true
-  deletion_protection = false
-  storage_encrypted   = false
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = {
+        Service = "ec2.amazonaws.com"
+      }
+    }]
+  })
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S5-Manual"
+    Scenario = "S6-Manual"
   }
+}
+
+resource "aws_iam_role_policy_attachment" "s6_manual" {
+  role       = aws_iam_role.s6_manual.name
+  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+  
+}
+
+resource "aws_iam_policy" "s6_wildcard" {
+  name_prefix = "manual-s6-policy-"
+  description = "Overly permissive policy"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "*"
+      Resource = "*"
+      # Human mistake 4: Wildcard action and resource
+    }]
+  })
 }
