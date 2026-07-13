@@ -1,4 +1,4 @@
-# Scenario 6 - Condition C - Kiro with repair - IAM Admin
+# Scenario 8 - Condition B - Kiro - VPC No Flow Logs
 terraform {
   required_providers {
     aws = {
@@ -12,28 +12,43 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_iam_role" "s6_kiro" {
-  name_prefix = "kiro-s6-"
-  description = "Dissertation test role with admin access"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Action    = "sts:AssumeRole"
-      Effect    = "Allow"
-      Principal = {
-        Service = "ec2.amazonaws.com"
-      }
-    }]
-  })
+resource "aws_vpc" "s8_kiro" {
+  cidr_block           = "10.0.0.0/16"
+  enable_dns_hostnames = true
+  enable_dns_support   = true
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S6-Kiro"
+    Scenario = "S8-Kiro"
   }
 }
 
-resource "aws_iam_role_policy_attachment" "s6_kiro" {
-  role       = aws_iam_role.s6_kiro.name
-  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+resource "aws_subnet" "s8_kiro_public" {
+  vpc_id                  = aws_vpc.s8_kiro.id
+  cidr_block              = "10.0.1.0/24"
+  map_public_ip_on_launch = true
+
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S8-Kiro-Public"
+  }
+}
+
+resource "aws_subnet" "s8_kiro_private" {
+  vpc_id     = aws_vpc.s8_kiro.id
+  cidr_block = "10.0.2.0/24"
+
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S8-Kiro-Private"
+  }
+}
+
+resource "aws_internet_gateway" "s8_kiro" {
+  vpc_id = aws_vpc.s8_kiro.id
+
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S8-Kiro-IGW"
+  }
 }
