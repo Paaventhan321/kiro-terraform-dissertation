@@ -13,7 +13,7 @@ provider "aws" {
 }
 
 resource "aws_iam_role" "s6_kiro_ec2" {
-  name = "kiro-s6-ec2-role"
+  name_prefix = "kiro-s6-"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -38,7 +38,7 @@ resource "aws_iam_role_policy_attachment" "s6_kiro_admin" {
 }
 
 resource "aws_iam_instance_profile" "s6_kiro" {
-  name = "kiro-s6-ec2-instance-profile"
+  name_prefix = "kiro-s6-profile-"
   role = aws_iam_role.s6_kiro_ec2.name
 
   tags = {
