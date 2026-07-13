@@ -40,12 +40,13 @@ resource "aws_lambda_function" "s7_manual" {
   runtime       = "python3.11"
 
   environment {
-    variables = {
-      AWS_ACCESS_KEY_ID     = "AKIAIOSFODNN7EXAMPLE"
-      AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-      DB_PASSWORD           = "SuperSecret123!"
-    }
+  variables = {
+    APP_ACCESS_KEY    = "AKIAIOSFODNN7EXAMPLE"
+    APP_SECRET_KEY    = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    DB_PASSWORD       = "SuperSecret123!"
+    API_TOKEN         = "hardcoded-secret-token-12345"
   }
+}
 
   tags = {
     Project  = "dissertation"
