@@ -1,4 +1,4 @@
-# Scenario 8 - Condition A - Manual - VPC No Flow Logs
+# Scenario 9 - Condition A - Manual - Multi-Resource
 terraform {
   required_providers {
     aws = {
@@ -12,46 +12,81 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_vpc" "s8_manual" {
-  cidr_block           = "10.0.0.0/16"
-  enable_dns_hostnames = true
-  enable_dns_support   = true
-
+# S3 Bucket - No encryption
+resource "aws_s3_bucket" "s9_manual" {
+  bucket_prefix = "manual-s9-"
   tags = {
     Project  = "dissertation"
-    Scenario = "S8-Manual"
+    Scenario = "S9-Manual"
   }
 }
 
-resource "aws_subnet" "s8_manual_public" {
-  vpc_id                  = aws_vpc.s8_manual.id
-  cidr_block              = "10.0.1.0/24"
-  map_public_ip_on_launch = true
+# Security Group - SSH open
+resource "aws_security_group" "s9_manual" {
+  name_prefix = "manual-s9-"
+  description = "Multi-resource test security group"
+
+  ingress {
+    description = "SSH from anywhere"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "HTTP from anywhere"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S8-Manual-Public"
+    Scenario = "S9-Manual"
   }
 }
 
-resource "aws_subnet" "s8_manual_private" {
-  vpc_id     = aws_vpc.s8_manual.id
-  cidr_block = "10.0.2.0/24"
+# IAM Role - Admin permissions
+resource "aws_iam_role" "s9_manual" {
+  name_prefix = "manual-s9-"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = {
+        Service = "ec2.amazonaws.com"
+      }
+    }]
+  })
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S8-Manual-Private"
+    Scenario = "S9-Manual"
   }
 }
 
-resource "aws_internet_gateway" "s8_manual" {
-  vpc_id = aws_vpc.s8_manual.id
+resource "aws_iam_role_policy_attachment" "s9_manual" {
+  role       = aws_iam_role.s9_manual.name
+  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+}
+
+# VPC - No flow logs
+resource "aws_vpc" "s9_manual" {
+  cidr_block = "10.9.0.0/16"
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S8-Manual-IGW"
+    Scenario = "S9-Manual"
   }
 }
-
-# Human forgot to add VPC flow logs
-# Human forgot to disable public IP auto-assignment
