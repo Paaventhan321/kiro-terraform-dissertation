@@ -1,4 +1,4 @@
-# Scenario 7 - Condition A - Manual - Lambda Hardcoded Credentials
+# Scenario 8 - Condition A - Manual - VPC No Flow Logs
 terraform {
   required_providers {
     aws = {
@@ -12,44 +12,46 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_iam_role" "s7_manual_lambda" {
-  name_prefix = "manual-s7-lambda-"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Action    = "sts:AssumeRole"
-      Effect    = "Allow"
-      Principal = {
-        Service = "lambda.amazonaws.com"
-      }
-    }]
-  })
+resource "aws_vpc" "s8_manual" {
+  cidr_block           = "10.0.0.0/16"
+  enable_dns_hostnames = true
+  enable_dns_support   = true
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S7-Manual"
+    Scenario = "S8-Manual"
   }
 }
 
-resource "aws_lambda_function" "s7_manual" {
-  filename      = "lambda_function.zip"
-  function_name = "manual-s7-lambda"
-  role          = aws_iam_role.s7_manual_lambda.arn
-  handler       = "index.handler"
-  runtime       = "python3.11"
-
-  environment {
-  variables = {
-    APP_ACCESS_KEY    = "AKIAIOSFODNN7EXAMPLE"
-    APP_SECRET_KEY    = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-    DB_PASSWORD       = "SuperSecret123!"
-    API_TOKEN         = "hardcoded-secret-token-12345"
-  }
-}
+resource "aws_subnet" "s8_manual_public" {
+  vpc_id                  = aws_vpc.s8_manual.id
+  cidr_block              = "10.0.1.0/24"
+  map_public_ip_on_launch = true
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S7-Manual"
+    Scenario = "S8-Manual-Public"
   }
 }
+
+resource "aws_subnet" "s8_manual_private" {
+  vpc_id     = aws_vpc.s8_manual.id
+  cidr_block = "10.0.2.0/24"
+
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S8-Manual-Private"
+  }
+}
+
+resource "aws_internet_gateway" "s8_manual" {
+  vpc_id = aws_vpc.s8_manual.id
+
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S8-Manual-IGW"
+  }
+}
+
+# Human forgot to add VPC flow logs
+# Human forgot to disable public IP auto-assignment
