@@ -59,8 +59,8 @@ resource "aws_security_group" "s9_kiro_web" {
 
 # IAM Role - AdministratorAccess
 resource "aws_iam_role" "s9_kiro_ec2" {
-  name = "kiro-s9-ec2-role"
-
+  name_prefix = "kiro-s9-"
+  
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
