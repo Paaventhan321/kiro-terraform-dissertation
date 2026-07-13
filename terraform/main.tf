@@ -1,5 +1,4 @@
-
-# Scenario 4 - Condition A - Manual - EC2 No IAM Role
+# Scenario 5 - Condition A - Manual - RDS Public Access
 terraform {
   required_providers {
     aws = {
@@ -13,21 +12,22 @@ provider "aws" {
   region = "us-east-1"
 }
 
-data "aws_ami" "amazon_linux" {
-  most_recent = true
-  owners      = ["amazon"]
-  filter {
-    name   = "name"
-    values = ["al2023-ami-*-x86_64"]
-  }
-}
+resource "aws_db_instance" "s5_manual" {
+  identifier        = "manual-s5-db"
+  engine            = "mysql"
+  engine_version    = "8.0"
+  instance_class    = "db.t3.micro"
+  allocated_storage = 20
+  username          = "admin"
+  password          = "TempPass123!"
 
-resource "aws_instance" "s4_manual" {
-  ami           = data.aws_ami.amazon_linux.id
-  instance_type = "t2.micro"
+  publicly_accessible = true
+  skip_final_snapshot = true
+  deletion_protection = false
+  storage_encrypted   = false
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S4-Manual"
+    Scenario = "S5-Manual"
   }
 }
