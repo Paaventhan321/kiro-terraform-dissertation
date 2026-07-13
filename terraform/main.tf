@@ -1,4 +1,4 @@
-# Scenario 10 - Condition A - Manual step- Valid Syntax Baseline
+# Scenario 10 - Condition A - Manual - Clean Syntax
 terraform {
   required_providers {
     aws = {
@@ -18,15 +18,6 @@ resource "aws_s3_bucket" "s10_manual" {
   tags = {
     Project  = "dissertation"
     Scenario = "S10-Manual"
-  }
-}
-
-resource "aws_s3_bucket_server_side_encryption_configuration" "s10_manual" {
-  bucket = aws_s3_bucket.s10_manual.id
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
-    }
   }
 }
 
