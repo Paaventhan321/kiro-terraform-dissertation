@@ -1,4 +1,4 @@
-# Scenario 9 - Condition c - Kiro - Multi-Resource Intentionally Misconfigured
+# Scenario 1 - Condition B - Kiro - S3 Baseline
 terraform {
   required_providers {
     aws = {
@@ -12,83 +12,38 @@ provider "aws" {
   region = "us-east-1"
 }
 
-# S3 Bucket - no encryption
-resource "aws_s3_bucket" "s9_kiro" {
-  bucket_prefix = "kiro-s9-"
+resource "aws_s3_bucket" "s1_kiro" {
+  bucket_prefix = "kiro-s1-"
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S9-Kiro"
+    Scenario = "S1-Kiro"
   }
 }
 
-# Security Group - SSH and HTTP open to the world
-resource "aws_security_group" "s9_kiro_web" {
-  name        = "kiro-s9-web-sg"
-  description = "Security group for web server"
+resource "aws_s3_bucket_server_side_encryption_configuration" "s1_kiro" {
+  bucket = aws_s3_bucket.s1_kiro.id
 
-  ingress {
-    description = "SSH from anywhere"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "HTTP from anywhere"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    description = "Allow all outbound traffic"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Project  = "dissertation"
-    Scenario = "S9-Kiro"
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
   }
 }
 
-# IAM Role - AdministratorAccess
-resource "aws_iam_role" "s9_kiro_ec2" {
-  name_prefix = "kiro-s9-"
-  
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect    = "Allow"
-        Principal = { Service = "ec2.amazonaws.com" }
-        Action    = "sts:AssumeRole"
-      }
-    ]
-  })
+resource "aws_s3_bucket_versioning" "s1_kiro" {
+  bucket = aws_s3_bucket.s1_kiro.id
 
-  tags = {
-    Project  = "dissertation"
-    Scenario = "S9-Kiro"
+  versioning_configuration {
+    status = "Enabled"
   }
 }
 
-resource "aws_iam_role_policy_attachment" "s9_kiro_admin" {
-  role       = aws_iam_role.s9_kiro_ec2.name
-  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
-}
+resource "aws_s3_bucket_public_access_block" "s1_kiro" {
+  bucket = aws_s3_bucket.s1_kiro.id
 
-# VPC - no flow logs
-resource "aws_vpc" "s9_kiro" {
-  cidr_block = "10.9.0.0/16"
-
-  tags = {
-    Project  = "dissertation"
-    Scenario = "S9-Kiro"
-  }
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
 }
