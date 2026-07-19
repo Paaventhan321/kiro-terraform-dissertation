@@ -3,6 +3,7 @@ import os
 import requests
 from datetime import datetime
 
+
 def read_checkov_results():
     try:
         with open("results/checkov_results.json", "r") as f:
@@ -10,9 +11,11 @@ def read_checkov_results():
     except:
         return {}
 
+
 def read_terraform_code():
     with open("terraform/main.tf", "r") as f:
         return f.read()
+
 
 def classify_failures(checkov_results):
     classified = {
@@ -36,15 +39,9 @@ def classify_failures(checkov_results):
         })
     return classified, len(failed)
 
+
 def build_prompt(terraform_code, failures):
-    # Now includes ALL severities instead of just CRITICAL/HIGH
-    all_failures = {
-        "CRITICAL": failures.get("CRITICAL", []),
-        "HIGH": failures.get("HIGH", []),
-        "MEDIUM": failures.get("MEDIUM", []),
-        "LOW": failures.get("LOW", [])
-    }
-    findings_text = json.dumps(all_failures, indent=2)
+    findings_text = json.dumps(failures, indent=2)
     return f"""
 You are an AWS Terraform security expert.
 
@@ -56,20 +53,27 @@ TERRAFORM CODE:
 SECURITY FINDINGS TO FIX:
 {findings_text}
 
-YOUR TASK:
-1. Fix ALL issues listed above: CRITICAL, HIGH, MEDIUM, and LOW severity
-2. Do NOT use placeholder values like YOUR_IP_ADDRESS
-3. Use 10.0.0.0/8 for restricted SSH CIDR blocks
-4. Do NOT add Lambda functions or complex resources
-5. Keep changes minimal and focused, don't break working resources
-6. Return ONLY valid HCL Terraform code
-7. No explanations, no markdown, no code blocks
+STRICT RULES:
+1. Fix ALL security issues listed above
+2. Do NOT use placeholder values
+3. Use 10.0.0.0/8 for restricted SSH CIDR
+4. Do NOT add replication configuration
+5. Do NOT add event notification resources
+6. Do NOT add Lambda or SNS resources
+7. Do NOT add KMS key resources
+   instead use SSE-S3 AES256 encryption
+8. For lifecycle add simple expiration rule only
+9. For logging add simple logging block only
+10. Every resource block must be complete
+11. Return ONLY valid HCL Terraform code
+12. No explanations no markdown no backticks
 """
+
 
 def call_repair_agent(prompt):
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        print("No OpenAI API key found. Skipping repair.")
+        print("No OpenAI API key found.")
         return None
 
     headers = {
@@ -82,7 +86,7 @@ def call_repair_agent(prompt):
         "messages": [
             {
                 "role": "system",
-                "content": "You are an AWS Terraform security expert. Return only valid HCL Terraform code with no explanations or markdown."
+                "content": "You are an AWS Terraform security expert. Return only valid complete HCL Terraform code. No markdown. No backticks. No explanations. Every resource block must have all required arguments."
             },
             {
                 "role": "user",
@@ -106,6 +110,7 @@ def call_repair_agent(prompt):
         print(response.text)
         return None
 
+
 def save_metrics(scenario, before_count, after_count,
                  attempts, success):
     row = (f"{datetime.now().isoformat()},"
@@ -113,6 +118,7 @@ def save_metrics(scenario, before_count, after_count,
            f"{after_count},{attempts},{success}\n")
     with open("results/metrics.csv", "a") as f:
         f.write(row)
+
 
 def main():
     print("Starting Repair Agent...")
@@ -126,7 +132,7 @@ def main():
     print(f"Low: {len(failures['LOW'])}")
 
     if total == 0:
-        print("No issues found. Deployment ready.")
+        print("No issues found. Already compliant.")
         save_metrics("kiro+repair", 0, 0, 0, True)
         return
 
@@ -142,6 +148,10 @@ def main():
         fixed_code = call_repair_agent(prompt)
 
         if fixed_code:
+            fixed_code = fixed_code.strip()
+            if fixed_code.startswith("```"):
+                lines = fixed_code.split("\n")
+                fixed_code = "\n".join(lines[1:-1])
             with open("terraform/main.tf", "w") as f:
                 f.write(fixed_code)
             print(f"Attempt {attempt}: Code repaired.")
@@ -160,6 +170,7 @@ def main():
     if not fixed:
         print("Repair Agent could not fix after 3 attempts.")
         print("Human intervention required.")
+
 
 if __name__ == "__main__":
     main()

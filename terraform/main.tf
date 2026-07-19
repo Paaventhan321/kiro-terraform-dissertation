@@ -1,4 +1,4 @@
-# Scenario 1 - Condition B - Kiro - S3 Baseline
+# Scenario 1 - Condition C - Kiro - S3 Baseline
 terraform {
   required_providers {
     aws = {
