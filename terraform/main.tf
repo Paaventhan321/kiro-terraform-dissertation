@@ -1,4 +1,4 @@
-# Scenario 1 - Condition B - Kiro - S3 Baseline
+# Scenario 2 - Condition B - Kiro - S3 Secure
 terraform {
   required_providers {
     aws = {
@@ -12,17 +12,17 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_s3_bucket" "s1_kiro" {
-  bucket_prefix = "kiro-s1-"
+resource "aws_s3_bucket" "s2_kiro" {
+  bucket_prefix = "kiro-s2-"
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S1-Kiro"
+    Scenario = "S2-Kiro"
   }
 }
 
-resource "aws_s3_bucket_server_side_encryption_configuration" "s1_kiro" {
-  bucket = aws_s3_bucket.s1_kiro.id
+resource "aws_s3_bucket_server_side_encryption_configuration" "s2_kiro" {
+  bucket = aws_s3_bucket.s2_kiro.id
 
   rule {
     apply_server_side_encryption_by_default {
@@ -31,16 +31,16 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "s1_kiro" {
   }
 }
 
-resource "aws_s3_bucket_versioning" "s1_kiro" {
-  bucket = aws_s3_bucket.s1_kiro.id
+resource "aws_s3_bucket_versioning" "s2_kiro" {
+  bucket = aws_s3_bucket.s2_kiro.id
 
   versioning_configuration {
     status = "Enabled"
   }
 }
 
-resource "aws_s3_bucket_public_access_block" "s1_kiro" {
-  bucket = aws_s3_bucket.s1_kiro.id
+resource "aws_s3_bucket_public_access_block" "s2_kiro" {
+  bucket = aws_s3_bucket.s2_kiro.id
 
   block_public_acls       = true
   block_public_policy     = true
