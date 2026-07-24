@@ -1,4 +1,4 @@
-# Scenario 7 - Condition B - Kiro - Lambda Intentionally Misconfigured
+# Scenario 3 - Condition B - Kiro - Security Group Web Server
 terraform {
   required_providers {
     aws = {
@@ -12,50 +12,36 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_iam_role" "s7_kiro_lambda" {
-  name = "kiro-s7-lambda-role-v2"
+resource "aws_security_group" "s3_kiro_web" {
+  name        = "kiro-s3-web-sg"
+  description = "Security group for web server"
 
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect    = "Allow"
-        Principal = { Service = "lambda.amazonaws.com" }
-        Action    = "sts:AssumeRole"
-      }
-    ]
-  })
-
-  tags = {
-    Project  = "dissertation"
-    Scenario = "S7-Kiro"
+  ingress {
+    description = "SSH from anywhere"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
-}
 
-resource "aws_iam_role_policy_attachment" "s7_kiro_lambda_basic" {
-  role       = aws_iam_role.s7_kiro_lambda.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-}
+  ingress {
+    description = "HTTP from anywhere"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 
-resource "aws_lambda_function" "s7_kiro" {
-  function_name = "kiro-s7-lambda"
-  role          = aws_iam_role.s7_kiro_lambda.arn
-  runtime       = "python3.11"
-  handler       = "lambda_function.lambda_handler"
-  filename      = "lambda_function.zip"
-
-  environment {
-    variables = {
-      APP_ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"
-      APP_SECRET_KEY = "wJalrXUtnFEMI12345KEY"
-      DB_PASSWORD    = "SuperSecret123!"
-      API_TOKEN      = "my-secret-api-token-123"
-    }
+  egress {
+    description = "Allow all outbound traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S7-Kiro"
+    Scenario = "S3-Kiro"
   }
 }
-
