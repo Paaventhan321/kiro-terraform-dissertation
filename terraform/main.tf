@@ -30,7 +30,7 @@ data "aws_ami" "amazon_linux_2023" {
 
 # ── IAM Role (least-privilege — SSM access only) ──────────────────────────────
 resource "aws_iam_role" "s4_kiro_ec2" {
-  name = "kiro-s4-ec2-role-v2"
+  name = "kiro-s4-ec2-role-v3"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -78,8 +78,8 @@ resource "aws_instance" "s4_kiro" {
     http_endpoint               = "enabled"
   }
 
-  # Encrypted root volume bumped to 30GB — 20GB was smaller than the
-  # AMI's underlying snapshot minimum, which caused a separate apply-time
+  # Encrypted root volume — 30GB (20GB was smaller than the AMI's
+  # underlying snapshot minimum, which caused a separate apply-time failure)
   root_block_device {
     encrypted   = true
     volume_type = "gp3"
