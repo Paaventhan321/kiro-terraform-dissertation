@@ -25,11 +25,25 @@ def classify_failures(checkov_results):
         "MEDIUM": [],
         "LOW": []
     }
-    failed = checkov_results.get(
-        "results", {}
-    ).get("failed_checks", [])
 
-    for check in failed:
+    # Checkov's JSON output can be a single dict (one framework, e.g. just
+    # "terraform") OR a list of dicts (multiple frameworks, e.g. both
+    # "terraform" and "secrets" scanned together - this happens whenever
+    # the scanned code contains something that trips the secrets detector,
+    # such as a hardcoded password). Handle both shapes.
+    if isinstance(checkov_results, list):
+        blocks = checkov_results
+    else:
+        blocks = [checkov_results]
+
+    all_failed = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        failed = block.get("results", {}).get("failed_checks", [])
+        all_failed.extend(failed)
+
+    for check in all_failed:
         severity = check.get("severity", "LOW")
         if severity is None or severity not in classified:
             severity = "LOW"
@@ -38,7 +52,7 @@ def classify_failures(checkov_results):
             "check_name": check.get("check_name"),
             "resource": check.get("resource")
         })
-    return classified, len(failed)
+    return classified, len(all_failed)
 
 
 def build_prompt(terraform_code, failures, previous_error=None):
