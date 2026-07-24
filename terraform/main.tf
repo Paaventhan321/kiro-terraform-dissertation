@@ -56,7 +56,7 @@ resource "aws_iam_role_policy_attachment" "s4_kiro_ssm" {
 
 resource "aws_iam_instance_profile" "s4_kiro" {
   name = "kiro-s4-ec2-instance-profile-v3"
-  role = aws_iam_role.s4-v3_kiro_ec2.name
+  role = aws_iam_role.s4_kiro_ec2.name
 
   tags = {
     Project  = "dissertation"
