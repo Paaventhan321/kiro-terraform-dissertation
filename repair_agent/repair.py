@@ -96,6 +96,23 @@ STRICT RULES:
     will be rejected by AWS even though Terraform accepts it as valid
     syntax. If a previous error mentions a required minimum size, increase
     the relevant value accordingly rather than leaving it unchanged.
+15. Do NOT invent, add, or introduce ANY resource type, resource name, or
+    service that is not already present in the TERRAFORM CODE shown above.
+    For example, if the given code only contains an aws_security_group and
+    no aws_s3_bucket exists anywhere in it, you must NEVER add an
+    aws_s3_bucket or any S3-related resource. Only modify arguments and
+    blocks within the resources that already exist, or add narrowly-scoped
+    supporting resources that are a direct, minimal requirement of an
+    existing resource (e.g. a target bucket strictly required by a
+    logging block you are adding to an existing aws_s3_bucket - never for
+    unrelated resource types like security groups, EC2, or IAM).
+16. If a fix requires changing a value like a restricted CIDR block and no
+    specific range was provided in the findings, use 10.0.0.0/8 as the
+    default restricted range consistently - do not invent a different or
+    more specific CIDR without justification.
+17. Do NOT alter a description or comment to claim a fix was made unless
+    the underlying value has genuinely changed to match. Descriptions must
+    accurately reflect the actual configuration.
 """
 
 
@@ -207,17 +224,61 @@ def validate_terraform(terraform_dir="terraform"):
         return False, f"Unexpected error running terraform validate: {e}"
 
 
+def get_planned_create_addresses(terraform_dir="terraform"):
+    """
+    Runs `terraform plan` and returns the list of resource addresses that
+    would be newly CREATED by this plan (not updated, not destroyed, not
+    already-existing). Used so that if apply fails partway through, we
+    only clean up resources THIS attempt tried to create - never the
+    entire state, which could include unrelated pre-existing
+    infrastructure from previous successful runs or other scenarios.
+    Returns (addresses: list or None, error_text: str or None).
+    """
+    try:
+        plan_result = subprocess.run(
+            ["terraform", "plan", "-out=tfplan", "-input=false"],
+            cwd=terraform_dir,
+            capture_output=True,
+            text=True,
+            timeout=180
+        )
+        if plan_result.returncode != 0:
+            return None, plan_result.stdout + plan_result.stderr
+
+        show_result = subprocess.run(
+            ["terraform", "show", "-json", "tfplan"],
+            cwd=terraform_dir,
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        parsed = json.loads(show_result.stdout)
+        addresses = []
+        for rc in parsed.get("resource_changes", []):
+            actions = rc.get("change", {}).get("actions", [])
+            if "create" in actions and "delete" not in actions:
+                addresses.append(rc["address"])
+        return addresses, None
+    except Exception as e:
+        return None, f"Could not determine planned resources: {e}"
+
+
 def apply_terraform(terraform_dir="terraform"):
     """
     Runs `terraform apply -auto-approve` against the current code.
-    This actually creates real AWS resources, so on failure it attempts
-    a `terraform destroy` to clean up any partially-created resources
-    before returning.
+    This actually creates real AWS resources. On failure, it cleans up
+    ONLY the resources this attempt planned to create (via -target),
+    never the whole state - protecting any unrelated, already-existing
+    infrastructure from being destroyed by a failed repair attempt.
     Returns (is_success: bool, error_text: str or None).
     """
     try:
+        planned_addresses, plan_error = get_planned_create_addresses(terraform_dir)
+        if planned_addresses is None:
+            return False, f"Could not plan before apply: {plan_error}"
+
         apply_result = subprocess.run(
-            ["terraform", "apply", "-auto-approve"],
+            ["terraform", "apply", "-auto-approve", "tfplan"],
             cwd=terraform_dir,
             capture_output=True,
             text=True,
@@ -229,19 +290,28 @@ def apply_terraform(terraform_dir="terraform"):
 
         error_text = apply_result.stdout + apply_result.stderr
 
-        # Clean up any partially-created resources before the next attempt
-        print("Apply failed. Running terraform destroy to clean up...")
-        destroy_result = subprocess.run(
-            ["terraform", "destroy", "-auto-approve"],
-            cwd=terraform_dir,
-            capture_output=True,
-            text=True,
-            timeout=300
-        )
-        if destroy_result.returncode != 0:
-            print("WARNING: destroy also failed. Manual cleanup may be "
-                  "required to avoid orphaned AWS resources / ongoing cost.")
-            print(destroy_result.stdout + destroy_result.stderr)
+        if planned_addresses:
+            print(f"Apply failed. Cleaning up ONLY the {len(planned_addresses)} "
+                  f"resource(s) this attempt tried to create (not the full "
+                  f"state): {planned_addresses}")
+            target_flags = []
+            for addr in planned_addresses:
+                target_flags += ["-target", addr]
+            destroy_result = subprocess.run(
+                ["terraform", "destroy", "-auto-approve"] + target_flags,
+                cwd=terraform_dir,
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            if destroy_result.returncode != 0:
+                print("WARNING: targeted cleanup failed. Manual cleanup may "
+                      "be required to avoid orphaned AWS resources / "
+                      "ongoing cost.")
+                print(destroy_result.stdout + destroy_result.stderr)
+        else:
+            print("No new resources were planned for creation - nothing to "
+                  "clean up.")
 
         return False, error_text
 
@@ -319,6 +389,7 @@ def main():
     print(f"Low: {len(failures['LOW'])}")
 
     original_code = read_terraform_code()
+    final_unresolved_count = None  # tracked precisely once we know
 
     # Collect the exact check_ids we need to resolve, so we can verify
     # against them specifically after repair, not just trust the model.
@@ -411,6 +482,7 @@ def main():
                 break  # don't burn remaining attempts on an unverifiable loop
 
             unresolved = original_failing_check_ids & still_failing
+            final_unresolved_count = len(unresolved)
             if not unresolved:
                 print(f"Attempt {attempt}: Checkov CONFIRMS all original "
                       f"findings resolved. Code repaired AND verified.")
@@ -441,10 +513,17 @@ def main():
         with open("terraform/main.tf", "w") as f:
             f.write(original_code)
 
+    # If we never got as far as a Checkov re-scan (e.g. validate/apply
+    # kept failing every attempt), we genuinely don't know how many
+    # findings would remain, so fall back to the honest worst case: total.
+    after_count = 0 if fixed else (
+        final_unresolved_count if final_unresolved_count is not None else total
+    )
+
     save_metrics(
         "kiro+repair",
         total,
-        0 if fixed else total,
+        after_count,
         attempt,
         fixed
     )
