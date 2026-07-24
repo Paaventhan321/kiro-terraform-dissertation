@@ -252,6 +252,13 @@ def get_planned_create_addresses(terraform_dir="terraform"):
             text=True,
             timeout=60
         )
+        if show_result.returncode != 0:
+            return None, (f"terraform show -json tfplan failed "
+                           f"(returncode {show_result.returncode}):\n"
+                           f"{show_result.stdout}\n{show_result.stderr}")
+        if not show_result.stdout.strip():
+            return None, "terraform show -json tfplan produced no output."
+
         parsed = json.loads(show_result.stdout)
         addresses = []
         for rc in parsed.get("resource_changes", []):
