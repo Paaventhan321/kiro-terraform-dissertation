@@ -1,3 +1,4 @@
+# Scenario 7 - Condition B - Kiro - Lambda Intentionally Misconfigured
 terraform {
   required_providers {
     aws = {
@@ -31,29 +32,24 @@ resource "aws_iam_role" "s7_kiro_lambda" {
   }
 }
 
-resource "aws_iam_role_policy_attachment" "s7_kiro_basic_exec" {
+resource "aws_iam_role_policy_attachment" "s7_kiro_lambda_basic" {
   role       = aws_iam_role.s7_kiro_lambda.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-}
-
-data "archive_file" "s7_kiro_lambda_zip" {
-  type        = "zip"
-  source_file = "${path.module}/lambda_function.py"
-  output_path = "${path.module}/lambda_function.zip"
 }
 
 resource "aws_lambda_function" "s7_kiro" {
   function_name = "kiro-s7-lambda"
   role          = aws_iam_role.s7_kiro_lambda.arn
-  handler       = "lambda_function.handler"
-  runtime       = "python3.12"
-  filename      = data.archive_file.s7_kiro_lambda_zip.output_path
+  runtime       = "python3.11"
+  handler       = "lambda_function.lambda_handler"
+  filename      = "lambda_function.zip"
 
-  
   environment {
     variables = {
-      AWS_ACCESS_KEY_ID     = "AKIAABCDEFGHIJKLMNOP"
-      AWS_SECRET_ACCESS_KEY = "hardcoded-secret-value-example"
+      APP_ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"
+      APP_SECRET_KEY = "wJalrXUtnFEMI12345KEY"
+      DB_PASSWORD    = "SuperSecret123!"
+      API_TOKEN      = "my-secret-api-token-123"
     }
   }
 
