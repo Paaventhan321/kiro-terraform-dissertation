@@ -47,11 +47,13 @@ def build_prompt(terraform_code, failures, previous_error=None):
     error_section = ""
     if previous_error:
         error_section = f"""
-YOUR PREVIOUS ATTEMPT FAILED TERRAFORM VALIDATION WITH THIS EXACT ERROR:
+THIS CODE CURRENTLY FAILS TERRAFORM VALIDATION WITH THIS EXACT ERROR:
 {previous_error}
 
-You MUST fix this specific error in your next attempt, in addition to the
-security findings below. Do not repeat the same mistake.
+You MUST fix this specific error (this is a code correctness / syntax /
+schema problem, separate from the security findings below). Do not repeat
+this mistake. Fixing this error takes priority — the code must pass
+`terraform validate` in addition to addressing the security findings.
 """
 
     return f"""
@@ -88,6 +90,12 @@ STRICT RULES:
     arguments per the current Terraform AWS provider schema
 12. Return ONLY valid HCL Terraform code
 13. No explanations, no markdown, no backticks, no code fences
+14. Be aware that some errors only appear at actual AWS deployment time,
+    not at validate/plan time - for example, an EC2 root_block_device
+    volume_size smaller than the selected AMI's underlying snapshot size
+    will be rejected by AWS even though Terraform accepts it as valid
+    syntax. If a previous error mentions a required minimum size, increase
+    the relevant value accordingly rather than leaving it unchanged.
 """
 
 
@@ -199,6 +207,50 @@ def validate_terraform(terraform_dir="terraform"):
         return False, f"Unexpected error running terraform validate: {e}"
 
 
+def apply_terraform(terraform_dir="terraform"):
+    """
+    Runs `terraform apply -auto-approve` against the current code.
+    This actually creates real AWS resources, so on failure it attempts
+    a `terraform destroy` to clean up any partially-created resources
+    before returning.
+    Returns (is_success: bool, error_text: str or None).
+    """
+    try:
+        apply_result = subprocess.run(
+            ["terraform", "apply", "-auto-approve"],
+            cwd=terraform_dir,
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
+
+        if apply_result.returncode == 0:
+            return True, None
+
+        error_text = apply_result.stdout + apply_result.stderr
+
+        # Clean up any partially-created resources before the next attempt
+        print("Apply failed. Running terraform destroy to clean up...")
+        destroy_result = subprocess.run(
+            ["terraform", "destroy", "-auto-approve"],
+            cwd=terraform_dir,
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
+        if destroy_result.returncode != 0:
+            print("WARNING: destroy also failed. Manual cleanup may be "
+                  "required to avoid orphaned AWS resources / ongoing cost.")
+            print(destroy_result.stdout + destroy_result.stderr)
+
+        return False, error_text
+
+    except subprocess.TimeoutExpired:
+        return False, "terraform apply or destroy timed out."
+    except Exception as e:
+        return False, f"Unexpected error running terraform apply: {e}"
+
+
 def save_metrics(scenario, before_count, after_count,
                   attempts, success):
     row = (f"{datetime.now().isoformat()},"
@@ -219,17 +271,39 @@ def main():
     print(f"Medium: {len(failures['MEDIUM'])}")
     print(f"Low: {len(failures['LOW'])}")
 
-    if total == 0:
-        print("No issues found. Already compliant.")
+    original_code = read_terraform_code()
+
+    # NEW: check whether Kiro's OWN code is even valid Terraform,
+    # independent of Checkov security findings. This catches syntax /
+    # schema mistakes Kiro itself introduced (e.g. Scenario 10 style
+    # broken HCL) that Checkov would never report, since Checkov only
+    # scans for security misconfigurations, not correctness.
+    print("Checking correctness of the original Kiro-generated code...")
+    original_is_valid, original_error = validate_terraform("terraform")
+
+    if original_is_valid:
+        print("Original code passed terraform validate (no correctness errors).")
+    else:
+        print("Original code FAILED terraform validate:")
+        print(original_error)
+
+    if total == 0 and original_is_valid:
+        print("No security issues and no correctness errors. Already compliant.")
         save_metrics("kiro+repair", 0, 0, 0, True)
         return
 
-    original_code = read_terraform_code()
+    if total == 0 and not original_is_valid:
+        print("No security issues found, but Kiro's code has a correctness "
+              "error. Repair Agent will attempt a correctness-only fix.")
+
     terraform_code = original_code
     max_attempts = 3
     attempt = 0
     fixed = False
-    previous_error = None
+    # Seed the first prompt with the correctness error (if any) so the very
+    # first repair attempt already knows about syntax/schema problems, not
+    # just security findings.
+    previous_error = original_error if not original_is_valid else None
 
     while attempt < max_attempts and not fixed:
         attempt += 1
@@ -248,8 +322,19 @@ def main():
         is_valid, error_text = validate_terraform("terraform")
 
         if is_valid:
-            print(f"Attempt {attempt}: Code repaired and VALID.")
-            fixed = True
+            print(f"Attempt {attempt}: Code is syntactically VALID. "
+                  f"Testing real deployment with terraform apply...")
+            apply_success, apply_error = apply_terraform("terraform")
+
+            if apply_success:
+                print(f"Attempt {attempt}: Code repaired AND deployed successfully.")
+                fixed = True
+            else:
+                print(f"Attempt {attempt}: terraform apply FAILED "
+                      f"(passed validate, but rejected by AWS API):")
+                print(apply_error)
+                terraform_code = fixed_code
+                previous_error = apply_error
         else:
             print(f"Attempt {attempt}: terraform validate FAILED:")
             print(error_text)
