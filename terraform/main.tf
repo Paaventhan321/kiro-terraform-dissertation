@@ -55,6 +55,6 @@ resource "aws_lambda_function" "s7_kiro" {
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S7-Kiro"
+    Scenario = "S7-Kiro run"
   }
 }
