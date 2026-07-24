@@ -1,4 +1,4 @@
-# Scenario 4 - Condition B - Kiro - EC2 Secure
+# Scenario 3 - Condition B - Kiro - Security Group Web Server
 terraform {
   required_providers {
     aws = {
@@ -12,83 +12,36 @@ provider "aws" {
   region = "us-east-1"
 }
 
-# ── AMI ───────────────────────────────────────────────────────────────────────
-data "aws_ami" "amazon_linux_2023" {
-  most_recent = true
-  owners      = ["amazon"]
+resource "aws_security_group" "s3_kiro_web" {
+  name        = "kiro-s3-web-sg"
+  description = "Security group for web server"
 
-  filter {
-    name   = "name"
-    values = ["al2023-ami-*-x86_64"]
+  ingress {
+    description = "SSH from anywhere"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-}
-
-# ── IAM Role (least-privilege — SSM access only) ──────────────────────────────
-resource "aws_iam_role" "s4_kiro_ec2" {
-  name = "kiro-s4-ec2-role-v3"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect    = "Allow"
-        Principal = { Service = "ec2.amazonaws.com" }
-        Action    = "sts:AssumeRole"
-      }
-    ]
-  })
-
-  tags = {
-    Project  = "dissertation"
-    Scenario = "S4-Kiro"
-  }
-}
-
-resource "aws_iam_role_policy_attachment" "s4_kiro_ssm" {
-  role       = aws_iam_role.s4_kiro_ec2.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
-
-resource "aws_iam_instance_profile" "s4_kiro" {
-  name = "kiro-s4-ec2-instance-profile-v3"
-  role = aws_iam_role.s4_kiro_ec2.name
-
-  tags = {
-    Project  = "dissertation"
-    Scenario = "S4-Kiro"
-  }
-}
-
-# ── EC2 Instance ──────────────────────────────────────────────────────────────
-resource "aws_instance" "s4_kiro" {
-  ami                         = data.aws_ami.amazon_linux_2023.id
-  instance_type               = "t2.micro"
-  iam_instance_profile        = aws_iam_instance_profile.s4_kiro.name
-  associate_public_ip_address = false
-
-  # Enforce IMDSv2
-  metadata_options {
-    http_tokens                 = "required"
-    http_put_response_hop_limit = 1
-    http_endpoint               = "enabled"
+  ingress {
+    description = "HTTP from anywhere"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # Encrypted root volume — 30GB (20GB was smaller than the AMI's
-  # underlying snapshot minimum, which caused a separate apply-time failure)
-  root_block_device {
-    encrypted   = true
-    volume_type = "gp3"
-    volume_size = 20
+  egress {
+    description = "Allow all outbound traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S4-Kiro"
+    Scenario = "S3-Kiro"
   }
 }
-
