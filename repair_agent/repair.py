@@ -251,6 +251,53 @@ def apply_terraform(terraform_dir="terraform"):
         return False, f"Unexpected error running terraform apply: {e}"
 
 
+def run_checkov(terraform_dir="terraform"):
+    """
+    Re-runs Checkov against the current code and returns the set of
+    check_ids that FAILED, so we can compare against the original
+    findings and know whether the repair actually worked - not just
+    whether the code happened to validate and deploy.
+    """
+    try:
+        result = subprocess.run(
+            ["checkov", "-d", terraform_dir, "--output", "json",
+             "--compact", "--quiet"],
+            capture_output=True,
+            text=True,
+            timeout=180
+        )
+        try:
+            parsed = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            print("Could not parse Checkov output as JSON:")
+            print(result.stdout[-2000:])
+            return None  # unknown - caller should treat cautiously
+
+        # Checkov's JSON output can be a list (multiple frameworks) or a
+        # single dict depending on version/flags - handle both.
+        if isinstance(parsed, list):
+            failed_ids = set()
+            for block in parsed:
+                for check in block.get("results", {}).get("failed_checks", []):
+                    failed_ids.add(check.get("check_id"))
+            return failed_ids
+        else:
+            failed_ids = set()
+            for check in parsed.get("results", {}).get("failed_checks", []):
+                failed_ids.add(check.get("check_id"))
+            return failed_ids
+
+    except FileNotFoundError:
+        print("checkov binary not found on PATH. Cannot verify security fix.")
+        return None
+    except subprocess.TimeoutExpired:
+        print("checkov scan timed out.")
+        return None
+    except Exception as e:
+        print(f"Unexpected error running checkov: {e}")
+        return None
+
+
 def save_metrics(scenario, before_count, after_count,
                   attempts, success):
     row = (f"{datetime.now().isoformat()},"
@@ -272,6 +319,14 @@ def main():
     print(f"Low: {len(failures['LOW'])}")
 
     original_code = read_terraform_code()
+
+    # Collect the exact check_ids we need to resolve, so we can verify
+    # against them specifically after repair, not just trust the model.
+    original_failing_check_ids = set()
+    for severity_list in failures.values():
+        for check in severity_list:
+            if check.get("check_id"):
+                original_failing_check_ids.add(check["check_id"])
 
     # NEW: check whether Kiro's OWN code is even valid Terraform,
     # independent of Checkov security findings. This catches syntax /
@@ -326,15 +381,54 @@ def main():
                   f"Testing real deployment with terraform apply...")
             apply_success, apply_error = apply_terraform("terraform")
 
-            if apply_success:
-                print(f"Attempt {attempt}: Code repaired AND deployed successfully.")
-                fixed = True
-            else:
+            if not apply_success:
                 print(f"Attempt {attempt}: terraform apply FAILED "
                       f"(passed validate, but rejected by AWS API):")
                 print(apply_error)
                 terraform_code = fixed_code
                 previous_error = apply_error
+                continue
+
+            # NEW: apply succeeding is NOT enough - actually re-scan with
+            # Checkov and confirm the ORIGINAL findings are resolved.
+            # A successful deploy does not prove the security content of
+            # the fix is correct (e.g. an EC2 instance without detailed
+            # monitoring or EBS optimization still deploys fine).
+            print(f"Attempt {attempt}: Deployed successfully. Re-running "
+                  f"Checkov to verify the original findings are actually "
+                  f"resolved...")
+            still_failing = run_checkov("terraform")
+
+            if still_failing is None:
+                print("WARNING: Could not verify via Checkov (scan failed "
+                      "or unavailable). Treating repair as UNVERIFIED, not "
+                      "confirmed fixed.")
+                fixed = False
+                previous_error = ("Previous attempt deployed successfully "
+                                   "but security findings could not be "
+                                   "independently verified via Checkov.")
+                terraform_code = fixed_code
+                break  # don't burn remaining attempts on an unverifiable loop
+
+            unresolved = original_failing_check_ids & still_failing
+            if not unresolved:
+                print(f"Attempt {attempt}: Checkov CONFIRMS all original "
+                      f"findings resolved. Code repaired AND verified.")
+                fixed = True
+            else:
+                print(f"Attempt {attempt}: Checkov re-scan shows these "
+                      f"findings are STILL FAILING (not actually fixed): "
+                      f"{unresolved}")
+                terraform_code = fixed_code
+                previous_error = (
+                    f"The code deployed successfully, but a Checkov "
+                    f"re-scan shows these specific checks are STILL "
+                    f"FAILING and were NOT actually fixed: "
+                    f"{', '.join(unresolved)}. You must make concrete "
+                    f"changes (e.g. add missing arguments) to resolve "
+                    f"these exact checks, not just leave the code "
+                    f"unchanged from a version that already 'validated'."
+                )
         else:
             print(f"Attempt {attempt}: terraform validate FAILED:")
             print(error_text)
