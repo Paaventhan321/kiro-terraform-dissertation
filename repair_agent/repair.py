@@ -24,6 +24,24 @@ COST_RESTRICTED_CHECK_IDS = {
 }
 
 
+def _extract_json(raw_text):
+    """
+    Some CI environments (e.g. GitHub Actions with step debug logging
+    enabled) prefix subprocess stdout with a literal command-echo line
+    like "[command]/path/to/terraform-bin show -json tfplan\\n" before
+    the actual JSON output. This strips any such prefix by finding the
+    first '{' or '[' and parsing from there, instead of assuming stdout
+    is pure JSON from position 0.
+    """
+    first_brace = raw_text.find("{")
+    first_bracket = raw_text.find("[")
+    candidates = [i for i in (first_brace, first_bracket) if i != -1]
+    if not candidates:
+        raise json.JSONDecodeError("No JSON object/array found in output", raw_text, 0)
+    start = min(candidates)
+    return json.loads(raw_text[start:])
+
+
 def read_checkov_results():
     try:
         with open("results/checkov_results.json", "r") as f:
@@ -219,7 +237,7 @@ def validate_terraform(terraform_dir="terraform"):
             cwd=terraform_dir, capture_output=True, text=True, timeout=60
         )
         try:
-            parsed = json.loads(validate_result.stdout)
+            parsed = _extract_json(validate_result.stdout)
         except json.JSONDecodeError:
             if validate_result.returncode == 0:
                 return True, None
@@ -278,7 +296,7 @@ def get_planned_create_addresses(terraform_dir="terraform"):
             return None, "terraform show -json tfplan produced no output."
 
         try:
-            parsed = json.loads(show_result.stdout)
+            parsed = _extract_json(show_result.stdout)
         except json.JSONDecodeError as e:
             print(f"DEBUG: invalid JSON from show. Error: {e}")
             print(f"DEBUG: Raw stdout (first 2000 chars): {show_result.stdout[:2000]!r}")
@@ -343,7 +361,7 @@ def run_checkov(terraform_dir="terraform"):
             capture_output=True, text=True, timeout=180
         )
         try:
-            parsed = json.loads(result.stdout)
+            parsed = _extract_json(result.stdout)
         except json.JSONDecodeError:
             print("Could not parse Checkov output as JSON:")
             print(result.stdout[-2000:])
