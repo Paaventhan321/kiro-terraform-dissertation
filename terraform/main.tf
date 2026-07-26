@@ -1,4 +1,4 @@
-# Scenario 3 - Condition A - Manual - Security Group SSH Open
+# Scenario 6 - Condition A - Manual - IAM Role 
 terraform {
   required_providers {
     aws = {
@@ -12,36 +12,43 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_security_group" "s3_manual" {
-  name_prefix = "manual-s3-"
-  description = "Web server security group"
+resource "aws_iam_role" "s6_manual_ec2" {
+  name = "manual-s6-ec2-role"
 
-  ingress {
-    description = "SSH for remote administration"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "HTTP web traffic"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    description = "Allow all outbound traffic"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Service = "ec2.amazonaws.com" }
+        Action    = "sts:AssumeRole"
+      }
+    ]
+  })
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S3-Manual"
+    Scenario = "S6-Manual"
+  }
+}
+
+
+resource "aws_iam_role_policy_attachment" "s6_manual_s3" {
+  role       = aws_iam_role.s6_manual_ec2.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+}
+
+resource "aws_iam_role_policy_attachment" "s6_manual_cw_logs" {
+  role       = aws_iam_role.s6_manual_ec2.name
+  policy_arn = "arn:aws:iam::aws:policy/CloudWatchFullAccess"
+}
+
+resource "aws_iam_instance_profile" "s6_manual" {
+  name = "manual-s6-ec2-instance-profile"
+  role = aws_iam_role.s6_manual_ec2.name
+
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S6-Manual"
   }
 }
