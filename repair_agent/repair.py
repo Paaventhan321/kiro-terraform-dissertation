@@ -5,7 +5,7 @@ import requests
 from datetime import datetime
 
 
-REPAIR_AGENT_VERSION = "v7-2026-07-24-cost-effective-only"
+REPAIR_AGENT_VERSION = "v8-2026-07-27-abort-multipart-rule"
 
 # Findings that require adding costly infrastructure to resolve (KMS keys,
 # cross-region replication, Multi-AZ, enhanced monitoring roles, new
@@ -166,6 +166,27 @@ STRICT RULES:
     mentions a required minimum size, increase the value accordingly.
 17. Do NOT alter a description or comment to claim a fix was made unless
     the underlying value has genuinely changed to match.
+18. For S3 lifecycle rules that need to "abort incomplete multipart
+    uploads", the CORRECT syntax is a NESTED BLOCK, never a flat
+    argument. Use exactly this structure:
+
+      rule {{
+        id     = "some-rule-id"
+        status = "Enabled"
+
+        abort_incomplete_multipart_upload {{
+          days_after_initiation = 7
+        }}
+      }}
+
+    Do NOT use "days_after_incomplete", "days_after_incomplete_upload",
+    or any other flat argument name for this - the Terraform AWS
+    provider schema requires the nested "abort_incomplete_multipart_upload"
+    block with a "days_after_initiation" argument inside it. If a
+    previous error says an argument like this was "not expected here",
+    that means you used a flat argument instead of this nested block -
+    switch to the nested block form shown above, do not just rename the
+    flat argument again.
 """
 
 
@@ -192,7 +213,11 @@ def call_repair_agent(prompt):
                     "have all required arguments and every referenced "
                     "resource must be declared in the same file. Never add "
                     "KMS keys, replication, Lambda, SNS, Multi-AZ, or "
-                    "enhanced monitoring - these are explicitly out of scope."
+                    "enhanced monitoring - these are explicitly out of scope. "
+                    "For S3 lifecycle 'abort incomplete multipart upload' "
+                    "rules, always use the nested "
+                    "abort_incomplete_multipart_upload { days_after_initiation "
+                    "= N } block - never a flat argument name."
                 )
             },
             {
