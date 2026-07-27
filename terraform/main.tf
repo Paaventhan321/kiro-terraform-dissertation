@@ -1,4 +1,4 @@
-# Scenario 7 - Condition B - Kiro - Lambda Intentionally Misconfigured
+# Scenario 11 - Condition B - Kiro - S3 Audit Log Storage
 terraform {
   required_providers {
     aws = {
@@ -12,49 +12,76 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_iam_role" "s7_kiro_lambda" {
-  name = "kiro-s7-lambda-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect    = "Allow"
-        Principal = { Service = "lambda.amazonaws.com" }
-        Action    = "sts:AssumeRole"
-      }
-    ]
-  })
+resource "aws_s3_bucket" "s11_kiro_audit" {
+  bucket_prefix = "kiro-s11-audit-"
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S7-Kiro"
+    Scenario = "S11-Kiro"
   }
 }
 
-resource "aws_iam_role_policy_attachment" "s7_kiro_lambda_basic" {
-  role       = aws_iam_role.s7_kiro_lambda.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-}
+# Encryption at rest
+resource "aws_s3_bucket_server_side_encryption_configuration" "s11_kiro_audit" {
+  bucket = aws_s3_bucket.s11_kiro_audit.id
 
-resource "aws_lambda_function" "s7_kiro" {
-  function_name = "kiro-s7-lambda"
-  role          = aws_iam_role.s7_kiro_lambda.arn
-  runtime       = "python3.11"
-  handler       = "lambda_function.lambda_handler"
-  filename      = "lambda_function.zip"
-
-  environment {
-    variables = {
-      APP_ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"
-      APP_SECRET_KEY = "wJalrXUtnFEMI12345KEY"
-      DB_PASSWORD    = "SuperSecret123!"
-      API_TOKEN      = "my-secret-api-token-123"
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
     }
   }
+}
 
-  tags = {
-    Project  = "dissertation"
-    Scenario = "S7-Kiro"
+# Versioning for audit integrity
+resource "aws_s3_bucket_versioning" "s11_kiro_audit" {
+  bucket = aws_s3_bucket.s11_kiro_audit.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+# Block all public access
+resource "aws_s3_bucket_public_access_block" "s11_kiro_audit" {
+  bucket = aws_s3_bucket.s11_kiro_audit.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# Lifecycle policy for long-term retention
+resource "aws_s3_bucket_lifecycle_configuration" "s11_kiro_audit" {
+  bucket = aws_s3_bucket.s11_kiro_audit.id
+
+  rule {
+    id     = "audit-log-retention"
+    status = "Enabled"
+
+    transition {
+      days          = 90
+      storage_class = "STANDARD_IA"
+    }
+
+    transition {
+      days          = 365
+      storage_class = "GLACIER"
+    }
+
+    transition {
+      days          = 1095
+      storage_class = "DEEP_ARCHIVE"
+    }
+
+    noncurrent_version_transition {
+      noncurrent_days = 30
+      storage_class   = "STANDARD_IA"
+    }
+
+    noncurrent_version_transition {
+      noncurrent_days = 90
+      storage_class   = "GLACIER"
+    }
   }
 }
