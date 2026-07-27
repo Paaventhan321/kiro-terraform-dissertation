@@ -5,7 +5,7 @@ import requests
 from datetime import datetime
 
 
-REPAIR_AGENT_VERSION = "v8-2026-07-27-abort-multipart-rule"
+REPAIR_AGENT_VERSION = "v9-2026-07-27-fixed-command-bracket-bug"
 
 # Findings that require adding costly infrastructure to resolve (KMS keys,
 # cross-region replication, Multi-AZ, enhanced monitoring roles, new
@@ -29,17 +29,24 @@ def _extract_json(raw_text):
     Some CI environments (e.g. GitHub Actions with step debug logging
     enabled) prefix subprocess stdout with a literal command-echo line
     like "[command]/path/to/terraform-bin show -json tfplan\\n" before
-    the actual JSON output. This strips any such prefix by finding the
-    first '{' or '[' and parsing from there, instead of assuming stdout
-    is pure JSON from position 0.
+    the actual JSON output. Critically, "[command]" itself contains a
+    literal '[' character, which previously confused a naive search for
+    the first '{' or '[' - it would match the bracket inside
+    "[command]" instead of the real JSON's opening bracket. This strips
+    any line starting with "[command]" FIRST, then searches for the
+    first '{' or '[' in what remains.
     """
-    first_brace = raw_text.find("{")
-    first_bracket = raw_text.find("[")
+    lines = raw_text.split("\n")
+    filtered_lines = [line for line in lines if not line.startswith("[command]")]
+    cleaned_text = "\n".join(filtered_lines)
+
+    first_brace = cleaned_text.find("{")
+    first_bracket = cleaned_text.find("[")
     candidates = [i for i in (first_brace, first_bracket) if i != -1]
     if not candidates:
         raise json.JSONDecodeError("No JSON object/array found in output", raw_text, 0)
     start = min(candidates)
-    return json.loads(raw_text[start:])
+    return json.loads(cleaned_text[start:])
 
 
 def read_checkov_results():
