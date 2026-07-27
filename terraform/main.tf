@@ -1,4 +1,4 @@
-# Scenario 8 - Condition B - Kiro - VPC Intentionally Misconfigured
+# Scenario 11 - Condition c - Kiro with repair - S3 Audit Log Storage
 terraform {
   required_providers {
     aws = {
@@ -12,44 +12,76 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_vpc" "s8_kiro" {
-  cidr_block = "10.0.0.0/16"
+resource "aws_s3_bucket" "s11_kiro_audit" {
+  bucket_prefix = "kiro-s11-audit-"
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S8-Kiro"
+    Scenario = "S11-Kiro"
   }
 }
 
-resource "aws_subnet" "s8_kiro_public" {
-  vpc_id            = aws_vpc.s8_kiro.id
-  cidr_block        = "10.0.1.0/24"
-  availability_zone = "us-east-1a"
+# Encryption at rest
+resource "aws_s3_bucket_server_side_encryption_configuration" "s11_kiro_audit" {
+  bucket = aws_s3_bucket.s11_kiro_audit.id
 
-  tags = {
-    Project  = "dissertation"
-    Scenario = "S8-Kiro"
-    Type     = "public"
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
   }
 }
 
-resource "aws_subnet" "s8_kiro_private" {
-  vpc_id            = aws_vpc.s8_kiro.id
-  cidr_block        = "10.0.2.0/24"
-  availability_zone = "us-east-1b"
+# Versioning for audit integrity
+resource "aws_s3_bucket_versioning" "s11_kiro_audit" {
+  bucket = aws_s3_bucket.s11_kiro_audit.id
 
-  tags = {
-    Project  = "dissertation"
-    Scenario = "S8-Kiro"
-    Type     = "private"
+  versioning_configuration {
+    status = "Enabled"
   }
 }
 
-resource "aws_internet_gateway" "s8_kiro" {
-  vpc_id = aws_vpc.s8_kiro.id
+# Block all public access
+resource "aws_s3_bucket_public_access_block" "s11_kiro_audit" {
+  bucket = aws_s3_bucket.s11_kiro_audit.id
 
-  tags = {
-    Project  = "dissertation"
-    Scenario = "S8-Kiro"
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# Lifecycle policy for long-term retention
+resource "aws_s3_bucket_lifecycle_configuration" "s11_kiro_audit" {
+  bucket = aws_s3_bucket.s11_kiro_audit.id
+
+  rule {
+    id     = "audit-log-retention"
+    status = "Enabled"
+
+    transition {
+      days          = 90
+      storage_class = "STANDARD_IA"
+    }
+
+    transition {
+      days          = 365
+      storage_class = "GLACIER"
+    }
+
+    transition {
+      days          = 1095
+      storage_class = "DEEP_ARCHIVE"
+    }
+
+    noncurrent_version_transition {
+      noncurrent_days = 30
+      storage_class   = "STANDARD_IA"
+    }
+
+    noncurrent_version_transition {
+      noncurrent_days = 90
+      storage_class   = "GLACIER"
+    }
   }
 }
