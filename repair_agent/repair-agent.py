@@ -398,9 +398,24 @@ def save_metrics(scenario, before_count, after_count, attempts, success):
         f.write(row)
 
 
+import hashlib
+
+
 def main():
     print("Starting Repair Agent (Cost-Effective Mode)...")
     print(f"Repair Agent version: {REPAIR_AGENT_VERSION}")
+
+    # Print a hash of THIS running file's own source code, so you can
+    # compare it directly against the reference file and know for
+    # certain whether the code actually executing matches what you
+    # intended to deploy - no more guessing based on version strings
+    # alone, which can be edited without changing the actual logic.
+    try:
+        with open(__file__, "rb") as f:
+            file_hash = hashlib.sha256(f.read()).hexdigest()
+        print(f"Repair Agent script SHA-256: {file_hash}")
+    except Exception as e:
+        print(f"Could not compute script hash: {e}")
 
     results = read_checkov_results()
     classified, total, attempt_findings, skipped_findings = classify_failures(results)

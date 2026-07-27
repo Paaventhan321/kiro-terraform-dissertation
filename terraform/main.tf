@@ -1,4 +1,4 @@
-# Scenario 7 - Condition B - Kiro - Lambda Intentionally Misconfigured
+# Scenario 7 - Condition C - Kiro repair- Lambda Intentionally Misconfigured
 terraform {
   required_providers {
     aws = {
