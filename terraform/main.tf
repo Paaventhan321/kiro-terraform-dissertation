@@ -1,4 +1,4 @@
-# Scenario 11 - Condition B - Kiro - S3 Audit Log Storage
+# Scenario 12 - Condition B - Kiro - EC2 Web Server
 terraform {
   required_providers {
     aws = {
@@ -12,76 +12,69 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_s3_bucket" "s11_kiro_audit" {
-  bucket_prefix = "kiro-s11-audit-"
+# ── AMI ───────────────────────────────────────────────────────────────────────
+
+data "aws_ami" "amazon_linux_2023" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["al2023-ami-*-x86_64"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+}
+
+# ── Security Group ────────────────────────────────────────────────────────────
+
+resource "aws_security_group" "s12_kiro_web" {
+  name        = "kiro-s12-web-sg"
+  description = "Security group for web server"
+
+  ingress {
+    description = "SSH from anywhere"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "HTTP from anywhere"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description = "Allow all outbound traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S11-Kiro"
+    Scenario = "S12-Kiro"
   }
 }
 
-# Encryption at rest
-resource "aws_s3_bucket_server_side_encryption_configuration" "s11_kiro_audit" {
-  bucket = aws_s3_bucket.s11_kiro_audit.id
+# ── EC2 Instance ──────────────────────────────────────────────────────────────
 
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
-    }
+resource "aws_instance" "s12_kiro_web" {
+  ami                    = data.aws_ami.amazon_linux_2023.id
+  instance_type          = "t2.micro"
+  vpc_security_group_ids = [aws_security_group.s12_kiro_web.id]
+
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S12-Kiro"
   }
 }
 
-# Versioning for audit integrity
-resource "aws_s3_bucket_versioning" "s11_kiro_audit" {
-  bucket = aws_s3_bucket.s11_kiro_audit.id
-
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
-# Block all public access
-resource "aws_s3_bucket_public_access_block" "s11_kiro_audit" {
-  bucket = aws_s3_bucket.s11_kiro_audit.id
-
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-# Lifecycle policy for long-term retention
-resource "aws_s3_bucket_lifecycle_configuration" "s11_kiro_audit" {
-  bucket = aws_s3_bucket.s11_kiro_audit.id
-
-  rule {
-    id     = "audit-log-retention"
-    status = "Enabled"
-
-    transition {
-      days          = 90
-      storage_class = "STANDARD_IA"
-    }
-
-    transition {
-      days          = 365
-      storage_class = "GLACIER"
-    }
-
-    transition {
-      days          = 1095
-      storage_class = "DEEP_ARCHIVE"
-    }
-
-    noncurrent_version_transition {
-      noncurrent_days = 30
-      storage_class   = "STANDARD_IA"
-    }
-
-    noncurrent_version_transition {
-      noncurrent_days = 90
-      storage_class   = "GLACIER"
-    }
-  }
-}
