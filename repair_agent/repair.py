@@ -5,36 +5,31 @@ import requests
 from datetime import datetime
 
 
-REPAIR_AGENT_VERSION = "v9-2026-07-27-fixed-command-bracket-bug"
+REPAIR_AGENT_VERSION = "v12-2026-07-27-file-redirect-json-capture"
 
-# Findings that require adding costly infrastructure to resolve (KMS keys,
-# cross-region replication, Multi-AZ, enhanced monitoring roles, new
-# attachment resources, etc). These are DELIBERATELY skipped rather than
-# attempted, to avoid unpredictable AWS billing from automated repair.
-# This list is based on real findings observed across Scenarios 1-5; add
-# to it as new costly patterns are discovered in future scenarios.
+# Only cross-region replication is excluded. Unlike KMS keys, Secrets
+# Manager, Multi-AZ, enhanced monitoring, or SG-attachment fixes -
+# replication's cost (cross-region data transfer fees) is triggered the
+# MOMENT data is replicated, not by how long resources exist. A fast
+# `terraform destroy` in your pipeline does NOT undo this cost, and
+# destroy can also be BLOCKED entirely if replicated objects/versions
+# exist without force_destroy = true set. Every other cost-risky finding
+# is now attempted, on the assumption that a destroy step runs promptly
+# after each test (see build_prompt rules for cost-minimization guidance
+# on each one, e.g. short KMS deletion windows, force_destroy flags).
 COST_RESTRICTED_CHECK_IDS = {
-    "CKV_AWS_145",   # RDS/S3 KMS encryption - $1/month/key + request fees
-    "CKV_AWS_144",   # S3 cross-region replication - storage + transfer fees
-    "CKV2_AWS_62",   # S3 event notifications - usually needs Lambda/SNS
-    "CKV_AWS_157",   # RDS Multi-AZ - roughly doubles instance cost
-    "CKV_AWS_118",   # RDS enhanced monitoring - needs new IAM role + cost
-    "CKV2_AWS_5",    # SG not attached - typically needs a new EC2 instance
-    "CKV_SECRET_6",  # Hardcoded secrets - proper fix needs Secrets Manager (~$0.40/mo)
+    "CKV_AWS_144",   # S3 cross-region replication - transfer cost is
+                     # incurred immediately on replication, not undone by
+                     # fast teardown; destroy can also be blocked without
+                     # force_destroy, leaving the 2nd-region bucket live.
 }
 
 
 def _extract_json(raw_text):
     """
-    Some CI environments (e.g. GitHub Actions with step debug logging
-    enabled) prefix subprocess stdout with a literal command-echo line
-    like "[command]/path/to/terraform-bin show -json tfplan\\n" before
-    the actual JSON output. Critically, "[command]" itself contains a
-    literal '[' character, which previously confused a naive search for
-    the first '{' or '[' - it would match the bracket inside
-    "[command]" instead of the real JSON's opening bracket. This strips
-    any line starting with "[command]" FIRST, then searches for the
-    first '{' or '[' in what remains.
+    Fallback text-based extraction, kept as a safety net. Prefer
+    run_json_command() below wherever possible, since it avoids this
+    problem at the source instead of trying to clean up polluted text.
     """
     lines = raw_text.split("\n")
     filtered_lines = [line for line in lines if not line.startswith("[command]")]
@@ -46,7 +41,83 @@ def _extract_json(raw_text):
     if not candidates:
         raise json.JSONDecodeError("No JSON object/array found in output", raw_text, 0)
     start = min(candidates)
-    return json.loads(cleaned_text[start:])
+
+    decoder = json.JSONDecoder()
+    parsed_value, _end_index = decoder.raw_decode(cleaned_text[start:])
+    return parsed_value
+
+
+def run_json_command(command_list, cwd, timeout, temp_filename, temp_dir=None):
+    """
+    Runs a command and captures its stdout by redirecting it DIRECTLY TO
+    A FILE at the OS level, instead of using subprocess capture_output.
+
+    ROOT CAUSE THIS SOLVES: some CI environments (e.g. GitHub Actions
+    with step debug logging enabled) inject extra text - like a literal
+    "[command]/path/to/binary ...\\n" echo line, or output from other
+    commands - into whatever capture_output=True collects as "stdout".
+    This appears to be an artifact of how the CI runner's own logging
+    wraps captured output, NOT something Terraform/Checkov themselves
+    produce. Redirecting the child process's stdout straight to a file
+    (via the `stdout=` file handle, not shell=True) captures ONLY that
+    process's real output, sidestepping the runner's logging layer
+    entirely - so no prefix-stripping or "find the first brace" guessing
+    is needed at all.
+
+    temp_dir: where to write the temp output file. Defaults to cwd, but
+    should be set to a location OUTSIDE any directory being scanned by
+    the command itself (e.g. Checkov scanning a Terraform directory
+    could otherwise mistake its own not-yet-complete JSON output file
+    for an IaC template).
+
+    Returns (parsed_json_or_None, returncode, error_text_or_None).
+    """
+    write_dir = temp_dir if temp_dir is not None else cwd
+    temp_path = os.path.join(write_dir, temp_filename)
+    try:
+        with open(temp_path, "w") as outfile:
+            result = subprocess.run(
+                command_list,
+                cwd=cwd,
+                stdout=outfile,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout
+            )
+
+        with open(temp_path, "r") as f:
+            file_content = f.read()
+
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+
+        if not file_content.strip():
+            return None, result.returncode, (
+                f"Command produced no output on stdout. Stderr: {result.stderr}"
+            )
+
+        try:
+            parsed = json.loads(file_content)
+            return parsed, result.returncode, None
+        except json.JSONDecodeError:
+            # Fall back to the text-cleaning extractor in case something
+            # unexpected still made it into the file.
+            try:
+                parsed = _extract_json(file_content)
+                return parsed, result.returncode, None
+            except json.JSONDecodeError as e:
+                return None, result.returncode, (
+                    f"Could not parse command output as JSON even after "
+                    f"file-redirect capture: {e}. First 500 chars: "
+                    f"{file_content[:500]!r}"
+                )
+
+    except subprocess.TimeoutExpired:
+        return None, None, "Command timed out."
+    except Exception as e:
+        return None, None, f"Unexpected error running command: {e}"
 
 
 def read_checkov_results():
@@ -134,46 +205,79 @@ The following Terraform code has security issues:
 TERRAFORM CODE:
 {terraform_code}
 
-SECURITY FINDINGS TO FIX (cost-safe subset only):
+SECURITY FINDINGS TO FIX:
 {findings_text}
 {error_section}
 STRICT RULES:
 1. Fix ALL security issues listed above
-2. Do NOT use placeholder values
-3. Use 10.0.0.0/8 for restricted SSH/network CIDR blocks
-4. Do NOT add KMS key resources (aws_kms_key) - use default AWS-managed
-   encryption (e.g. SSE-S3 AES256) instead, since customer-managed KMS
-   keys have ongoing cost.
+2. Do NOT use placeholder values for anything EXCEPT credentials/secrets -
+   see rule 4 below for the correct way to handle hardcoded secrets.
+3. Use 10.0.0.0/8 for restricted SSH/network CIDR blocks unless the
+   findings specify otherwise.
+4. HARDCODED SECRETS: if a finding flags a hardcoded password/key/token
+   (e.g. CKV_SECRET_6, CKV_AWS_45), do NOT invent a different hardcoded
+   value. Instead, replace it with a Terraform variable reference (e.g.
+   var.db_password), and add a matching "variable" block marked
+   sensitive = true with NO default value. Do NOT create an
+   aws_secretsmanager_secret resource unless a finding specifically
+   requires it - the variable approach is the minimal, no-new-resource fix.
 5. Do NOT add replication configuration (aws_s3_bucket_replication_configuration)
-   - this requires a second bucket with ongoing storage/transfer costs.
-6. Do NOT add event notification resources (aws_s3_bucket_notification),
-   Lambda functions, or SNS topics.
-7. Do NOT enable Multi-AZ on any RDS instance (multi_az) - this roughly
-   doubles the instance's running cost.
-8. Do NOT add enhanced monitoring (monitoring_interval / monitoring_role_arn)
-   on RDS instances - this requires a new IAM role and adds cost.
-9. Do NOT invent, add, or introduce ANY resource type, resource name, or
-   service that is not already present in the TERRAFORM CODE shown above.
-   Only modify arguments and blocks within resources that already exist.
-10. LIFECYCLE RULE: if you add aws_s3_bucket_lifecycle_configuration, every
+   under any circumstances - this is the one finding type excluded from
+   automated repair, because its cost (cross-region data transfer) is
+   incurred immediately on replication and is not undone by later
+   destroying the resources.
+6. KMS ENCRYPTION: if a finding requires KMS-based encryption
+   (e.g. CKV_AWS_145), you MAY add an aws_kms_key resource. Use a minimal,
+   safe key policy that grants the account root full access (to avoid a
+   lockout scenario), and set deletion_window_in_days = 7 (the minimum
+   allowed) to reduce how long the key remains billable after destroy.
+7. RDS MULTI-AZ: if a finding requires Multi-AZ (e.g. CKV_AWS_157), you
+   MAY set multi_az = true on the existing aws_db_instance. Do not create
+   a separate/second database instance for this - it is a single argument
+   on the existing resource.
+8. RDS ENHANCED MONITORING: if a finding requires enhanced monitoring
+   (e.g. CKV_AWS_118), you MAY add monitoring_interval (e.g. 60) and a
+   minimal supporting aws_iam_role with the AWS-managed
+   "AmazonRDSEnhancedMonitoringRole" policy attached, referenced via
+   monitoring_role_arn. Do not add any other unrelated IAM permissions.
+9. SECURITY GROUP ATTACHMENT: if a finding requires a security group to be
+   attached to another resource (e.g. CKV2_AWS_5) and no suitable existing
+   resource is present in the code, you MAY add a minimal
+   aws_network_interface as the smallest possible attachment target,
+   clearly commented as added solely to satisfy this finding. Do not add
+   a full EC2 instance unless a network interface alone cannot satisfy
+   the check.
+10. EVENT NOTIFICATIONS: if a finding requires S3 event notifications
+    (e.g. CKV2_AWS_62), you MAY add the minimum required target (e.g. a
+    single aws_sns_topic) needed to satisfy aws_s3_bucket_notification -
+    do not add Lambda functions unless the finding specifically requires
+    Lambda as the target.
+11. Do NOT invent, add, or introduce any resource that is not directly
+    required to resolve one of the specific findings listed above. Every
+    new resource you add must have a clear, traceable justification tied
+    to a specific finding ID from the list above.
+12. LIFECYCLE RULE: if you add aws_s3_bucket_lifecycle_configuration, every
     single "rule" block MUST include either an empty "filter {{}}" block or
     a "prefix" argument. Never omit both.
-11. LOGGING RULE: if you add a logging block referencing a target bucket,
+13. LOGGING RULE: if you add a logging block referencing a target bucket,
     you MUST also declare that exact bucket resource in the same file, or
     skip the logging fix entirely rather than leave a dangling reference.
-12. Do not remove or break any resource that is already working correctly
-13. Every resource block must be syntactically complete with all required
+14. If you add any resource that supports force_destroy (e.g. an S3
+    bucket), set force_destroy = true so that automated test teardown via
+    `terraform destroy` does not get blocked by leftover objects/versions.
+15. Do not remove or break any resource that is already working correctly
+16. Every resource block must be syntactically complete with all required
     arguments per the current Terraform AWS provider schema. Double-check
     exact argument names - do not guess or approximate them.
-14. Return ONLY valid HCL Terraform code
-15. No explanations, no markdown, no backticks, no code fences
-16. Be aware that some errors only appear at actual AWS deployment time,
+17. Return ONLY valid HCL Terraform code
+18. No explanations, no markdown, no backticks, no code fences
+19. Be aware that some errors only appear at actual AWS deployment time,
     not at validate/plan time (e.g. an EC2 root_block_device volume_size
     smaller than the selected AMI's snapshot minimum). If a previous error
     mentions a required minimum size, increase the value accordingly.
-17. Do NOT alter a description or comment to claim a fix was made unless
+20. Do NOT alter a description or comment to claim a fix was made unless
     the underlying value has genuinely changed to match.
-18. For S3 lifecycle rules that need to "abort incomplete multipart
+21. For S3 lifecycle rules that need to "abort incomplete multipart
     uploads", the CORRECT syntax is a NESTED BLOCK, never a flat
     argument. Use exactly this structure:
 
@@ -218,9 +322,15 @@ def call_repair_agent(prompt):
                     "valid, complete HCL Terraform code. No markdown, no "
                     "backticks, no explanations. Every resource block must "
                     "have all required arguments and every referenced "
-                    "resource must be declared in the same file. Never add "
-                    "KMS keys, replication, Lambda, SNS, Multi-AZ, or "
-                    "enhanced monitoring - these are explicitly out of scope. "
+                    "resource must be declared in the same file. You MAY add "
+                    "KMS keys, Multi-AZ, enhanced monitoring, event "
+                    "notifications, or minimal attachment resources if a "
+                    "specific finding requires them, using the minimum "
+                    "resources necessary. Never add S3 replication "
+                    "configuration - that is the one finding type explicitly "
+                    "out of scope. For hardcoded secrets, use a Terraform "
+                    "variable (sensitive = true, no default) instead of a "
+                    "new hardcoded value or a Secrets Manager resource. "
                     "For S3 lifecycle 'abort incomplete multipart upload' "
                     "rules, always use the nested "
                     "abort_incomplete_multipart_upload { days_after_initiation "
@@ -264,16 +374,17 @@ def validate_terraform(terraform_dir="terraform"):
         if init_result.returncode != 0:
             return False, f"terraform init failed:\n{init_result.stdout}\n{init_result.stderr}"
 
-        validate_result = subprocess.run(
+        parsed, returncode, error_text = run_json_command(
             ["terraform", "validate", "-json"],
-            cwd=terraform_dir, capture_output=True, text=True, timeout=60
+            cwd=terraform_dir,
+            timeout=60,
+            temp_filename="_validate_output.json"
         )
-        try:
-            parsed = _extract_json(validate_result.stdout)
-        except json.JSONDecodeError:
-            if validate_result.returncode == 0:
+
+        if parsed is None:
+            if returncode == 0:
                 return True, None
-            return False, validate_result.stdout + validate_result.stderr
+            return False, error_text or "terraform validate failed with no output."
 
         if parsed.get("valid") is True:
             return True, None
@@ -311,31 +422,21 @@ def get_planned_create_addresses(terraform_dir="terraform"):
             print("STDERR:", plan_result.stderr)
             return None, plan_result.stdout + plan_result.stderr
 
-        show_result = subprocess.run(
+        show_parsed, show_returncode, show_error = run_json_command(
             ["terraform", "show", "-json", "tfplan"],
-            cwd=terraform_dir, capture_output=True, text=True, timeout=60
+            cwd=terraform_dir,
+            timeout=60,
+            temp_filename="_show_output.json"
         )
-        if show_result.returncode != 0:
-            print("DEBUG: terraform show -json tfplan failed.")
-            print("STDOUT:", show_result.stdout)
-            print("STDERR:", show_result.stderr)
-            return None, (f"terraform show -json tfplan failed "
-                           f"(returncode {show_result.returncode}):\n"
-                           f"{show_result.stdout}\n{show_result.stderr}")
-        if not show_result.stdout.strip():
-            print("DEBUG: terraform show -json tfplan returned empty stdout. "
-                  f"Full stderr was: {show_result.stderr}")
-            return None, "terraform show -json tfplan produced no output."
 
-        try:
-            parsed = _extract_json(show_result.stdout)
-        except json.JSONDecodeError as e:
-            print(f"DEBUG: invalid JSON from show. Error: {e}")
-            print(f"DEBUG: Raw stdout (first 2000 chars): {show_result.stdout[:2000]!r}")
-            return None, f"terraform show -json tfplan produced invalid JSON: {e}"
+        if show_parsed is None:
+            print("DEBUG: terraform show -json tfplan failed or produced "
+                  "unparseable output.")
+            print(f"DEBUG: {show_error}")
+            return None, show_error or "terraform show -json tfplan produced no usable output."
 
         addresses = []
-        for rc in parsed.get("resource_changes", []):
+        for rc in show_parsed.get("resource_changes", []):
             actions = rc.get("change", {}).get("actions", [])
             if "create" in actions and "delete" not in actions:
                 addresses.append(rc["address"])
@@ -387,16 +488,18 @@ def apply_terraform(terraform_dir="terraform"):
 
 def run_checkov(terraform_dir="terraform"):
     try:
-        result = subprocess.run(
+        parsed, returncode, error_text = run_json_command(
             ["checkov", "-d", terraform_dir, "--output", "json",
              "--compact", "--quiet"],
-            capture_output=True, text=True, timeout=180
+            cwd=".",
+            timeout=180,
+            temp_filename="_checkov_output.json",
+            temp_dir="."
         )
-        try:
-            parsed = _extract_json(result.stdout)
-        except json.JSONDecodeError:
+
+        if parsed is None:
             print("Could not parse Checkov output as JSON:")
-            print(result.stdout[-2000:])
+            print(error_text)
             return None
 
         if isinstance(parsed, list):
@@ -434,7 +537,7 @@ import hashlib
 
 
 def main():
-    print("Starting Repair Agent (Cost-Effective Mode)...")
+    print("Starting Repair Agent (Unrestricted Mode - Replication Excluded)...")
     print(f"Repair Agent version: {REPAIR_AGENT_VERSION}")
 
     # Print a hash of THIS running file's own source code, so you can
@@ -457,8 +560,8 @@ def main():
     print(f"High: {len(classified['HIGH'])}")
     print(f"Medium: {len(classified['MEDIUM'])}")
     print(f"Low: {len(classified['LOW'])}")
-    print(f"Attemptable (cost-safe): {len(attempt_findings)}")
-    print(f"Skipped (cost-risky, NOT attempted): {len(skipped_findings)}")
+    print(f"Attemptable: {len(attempt_findings)}")
+    print(f"Skipped (replication only, NOT attempted): {len(skipped_findings)}")
     if skipped_findings:
         print("The following findings were deliberately SKIPPED due to cost risk:")
         for f in skipped_findings:
@@ -478,9 +581,9 @@ def main():
         print(original_error)
 
     if not attempt_findings and original_is_valid:
-        print("No cost-safe issues to fix, and no correctness errors. "
-              f"({len(skipped_findings)} cost-risky findings left untouched.)")
-        save_metrics("kiro+repair-cost-safe", total, len(skipped_findings), 0, True)
+        print("No issues to fix, and no correctness errors. "
+              f"({len(skipped_findings)} replication findings left untouched.)")
+        save_metrics("kiro+repair-unrestricted", total, len(skipped_findings), 0, True)
         return
 
     terraform_code = original_code
@@ -518,7 +621,7 @@ def main():
                 continue
 
             print(f"Attempt {attempt}: Deployed successfully. Re-running "
-                  f"Checkov to verify the cost-safe findings are resolved...")
+                  f"Checkov to verify the findings are resolved...")
             still_failing = run_checkov("terraform")
 
             if still_failing is None:
@@ -532,13 +635,13 @@ def main():
             unresolved = attempt_check_ids & still_failing
             final_unresolved_count = len(unresolved) + len(skipped_findings)
             if not unresolved:
-                print(f"Attempt {attempt}: Checkov CONFIRMS all cost-safe "
-                      f"findings resolved. ({len(skipped_findings)} cost-risky "
+                print(f"Attempt {attempt}: Checkov CONFIRMS all attempted "
+                      f"findings resolved. ({len(skipped_findings)} replication "
                       f"findings were deliberately left unresolved.)")
                 fixed = True
             else:
                 print(f"Attempt {attempt}: Checkov re-scan shows these "
-                      f"cost-safe findings are STILL FAILING: {unresolved}")
+                      f"attempted findings are STILL FAILING: {unresolved}")
                 terraform_code = fixed_code
                 previous_error = (
                     f"The code deployed successfully, but a Checkov re-scan "
@@ -562,11 +665,11 @@ def main():
         final_unresolved_count if final_unresolved_count is not None else total
     )
 
-    save_metrics("kiro+repair-cost-safe", total, after_count, attempt, fixed)
+    save_metrics("kiro+repair-unrestricted", total, after_count, attempt, fixed)
 
     if not fixed:
         print("Human intervention required.")
-    print(f"Note: {len(skipped_findings)} cost-risky findings were never "
+    print(f"Note: {len(skipped_findings)} replication findings were never "
           f"attempted by design and remain unresolved regardless of outcome.")
 
 
