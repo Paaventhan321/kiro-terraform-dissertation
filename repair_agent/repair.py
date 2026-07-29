@@ -5,7 +5,7 @@ import requests
 from datetime import datetime
 
 
-REPAIR_AGENT_VERSION = "v12-2026-07-27-file-redirect-json-capture"
+REPAIR_AGENT_VERSION = "v13-2026-07-28-retain-best-partial-fix"
 
 # Only cross-region replication is excluded. Unlike KMS keys, Secrets
 # Manager, Multi-AZ, enhanced monitoring, or SG-attachment fixes -
@@ -298,6 +298,17 @@ STRICT RULES:
     that means you used a flat argument instead of this nested block -
     switch to the nested block form shown above, do not just rename the
     flat argument again.
+22. KMS KEY REFERENCES: when referencing an aws_kms_key resource from
+    another resource's encryption argument (e.g. kms_key_id on an
+    aws_ebs_volume, aws_db_instance, or aws_s3_bucket encryption
+    configuration), you MUST use the key's ARN attribute
+    (aws_kms_key.NAME.arn), NEVER its raw ID attribute
+    (aws_kms_key.NAME.id). Using .id instead of .arn will fail at
+    deployment with "invalid ARN: arn: invalid prefix", because most
+    kms_key_id/kms_key_arn arguments expect the full ARN format, not the
+    bare key ID. Also, the correct argument name for setting a custom key
+    policy on aws_kms_key is "policy", NOT "key_policy" - "key_policy" is
+    not a valid argument for this resource.
 """
 
 
@@ -592,6 +603,14 @@ def main():
     fixed = False
     previous_error = original_error if not original_is_valid else None
 
+    # Track the BEST verified result across all attempts, so that if a
+    # later attempt fails, we don't discard genuine, Checkov-verified
+    # progress made by an earlier attempt. "Best" = the attempt with the
+    # fewest still-failing findings, among attempts that actually passed
+    # validate + apply + a real Checkov re-scan.
+    best_code = None
+    best_unresolved = None  # set of check_ids still failing, for the best attempt
+
     while attempt < max_attempts and not fixed:
         attempt += 1
         print(f"Repair attempt {attempt} of {max_attempts}...")
@@ -626,14 +645,24 @@ def main():
 
             if still_failing is None:
                 print("WARNING: Could not verify via Checkov. Treating as UNVERIFIED.")
-                fixed = False
                 previous_error = ("Previous attempt deployed successfully but "
                                    "could not be verified via Checkov.")
                 terraform_code = fixed_code
-                break
+                continue
 
             unresolved = attempt_check_ids & still_failing
-            final_unresolved_count = len(unresolved) + len(skipped_findings)
+
+            # Record this as the best result so far if it beats the
+            # current best (fewer unresolved findings), regardless of
+            # whether it's a full or partial success.
+            if best_unresolved is None or len(unresolved) < len(best_unresolved):
+                best_code = fixed_code
+                best_unresolved = unresolved
+                print(f"Attempt {attempt}: New best result - {len(unresolved)} "
+                      f"of {len(attempt_check_ids)} attempted findings still "
+                      f"failing (previously best: "
+                      f"{'N/A' if best_unresolved is None else len(best_unresolved)}).")
+
             if not unresolved:
                 print(f"Attempt {attempt}: Checkov CONFIRMS all attempted "
                       f"findings resolved. ({len(skipped_findings)} replication "
@@ -655,20 +684,59 @@ def main():
             terraform_code = fixed_code
             previous_error = error_text
 
-    if not fixed:
-        print(f"Repair Agent could not produce valid Terraform after "
+    final_unresolved_count = None
+
+    if fixed:
+        # Full success on the final attempt - already deployed correctly.
+        final_unresolved_count = len(skipped_findings)
+    elif best_code is not None:
+        # No attempt achieved full success, but at least one attempt made
+        # genuine, VERIFIED partial progress. Re-deploy that best version
+        # instead of discarding it, since it is strictly better than the
+        # original Kiro code and has already been confirmed via Checkov.
+        print(f"Repair Agent could not fully resolve all findings after "
+              f"{max_attempts} attempts. However, an earlier attempt made "
+              f"verified partial progress ({len(best_unresolved)} of "
+              f"{len(attempt_check_ids)} attempted findings still failing, "
+              f"vs {len(attempt_check_ids)} in the original code). "
+              f"Re-deploying that best partial fix instead of reverting to "
+              f"the original, fully-unresolved code.")
+        with open("terraform/main.tf", "w") as f:
+            f.write(best_code)
+        redeploy_valid, redeploy_error = validate_terraform("terraform")
+        if redeploy_valid:
+            redeploy_success, redeploy_apply_error = apply_terraform("terraform")
+            if redeploy_success:
+                print("Best partial fix re-deployed and confirmed live.")
+                final_unresolved_count = len(best_unresolved) + len(skipped_findings)
+            else:
+                print(f"WARNING: Could not re-deploy the best partial fix "
+                      f"({redeploy_apply_error}). Falling back to reverting "
+                      f"to the original code for safety.")
+                with open("terraform/main.tf", "w") as f:
+                    f.write(original_code)
+                final_unresolved_count = total
+        else:
+            print(f"WARNING: Best partial fix no longer validates cleanly "
+                  f"on re-check ({redeploy_error}). Falling back to "
+                  f"reverting to the original code for safety.")
+            with open("terraform/main.tf", "w") as f:
+                f.write(original_code)
+            final_unresolved_count = total
+    else:
+        # No attempt ever produced a verified result at all - revert to
+        # the original code, same as before.
+        print(f"Repair Agent could not produce any verified result after "
               f"{max_attempts} attempts. Reverting to last known-good code.")
         with open("terraform/main.tf", "w") as f:
             f.write(original_code)
+        final_unresolved_count = total
 
-    after_count = len(skipped_findings) if fixed else (
-        final_unresolved_count if final_unresolved_count is not None else total
-    )
-
-    save_metrics("kiro+repair-unrestricted", total, after_count, attempt, fixed)
+    save_metrics("kiro+repair-unrestricted", total, final_unresolved_count, attempt, fixed)
 
     if not fixed:
-        print("Human intervention required.")
+        print("Human intervention may still be required for any remaining "
+              "unresolved findings.")
     print(f"Note: {len(skipped_findings)} replication findings were never "
           f"attempted by design and remain unresolved regardless of outcome.")
 
