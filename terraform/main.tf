@@ -1,4 +1,4 @@
-# Scenario 12 - Condition B - Kiro - EC2 Web Server
+# Scenario 13 - Condition B - Kiro - RDS PostgreSQL Secure
 terraform {
   required_providers {
     aws = {
@@ -12,69 +12,31 @@ provider "aws" {
   region = "us-east-1"
 }
 
-# ── AMI ───────────────────────────────────────────────────────────────────────
+resource "aws_db_instance" "s13_kiro" {
+  identifier        = "kiro-s13-postgres"
+  engine            = "postgres"
+  engine_version    = "16.3"
+  instance_class    = "db.t3.micro"
+  allocated_storage = 20
 
-data "aws_ami" "amazon_linux_2023" {
-  most_recent = true
-  owners      = ["amazon"]
+  db_name  = "dissertation"
+  username = "dbadmin"
+  password = "changeme123"
 
-  filter {
-    name   = "name"
-    values = ["al2023-ami-*-x86_64"]
-  }
+  publicly_accessible = false
+  storage_encrypted   = true
+  deletion_protection = true
+  skip_final_snapshot = false
+  final_snapshot_identifier = "kiro-s13-postgres-final-snapshot"
 
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-}
+  backup_retention_period = 7
+  backup_window           = "03:00-04:00"
+  maintenance_window      = "mon:04:00-mon:05:00"
 
-# ── Security Group ────────────────────────────────────────────────────────────
-
-resource "aws_security_group" "s12_kiro_web" {
-  name        = "kiro-s12-web-sg"
-  description = "Security group for web server"
-
-  ingress {
-    description = "SSH from anywhere"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "HTTP from anywhere"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    description = "Allow all outbound traffic"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  auto_minor_version_upgrade = true
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S12-Kiro"
+    Scenario = "S13-Kiro"
   }
 }
-
-# ── EC2 Instance ──────────────────────────────────────────────────────────────
-
-resource "aws_instance" "s12_kiro_web" {
-  ami                    = data.aws_ami.amazon_linux_2023.id
-  instance_type          = "t2.micro"
-  vpc_security_group_ids = [aws_security_group.s12_kiro_web.id]
-
-  tags = {
-    Project  = "dissertation"
-    Scenario = "S12-Kiro"
-  }
-}
-
