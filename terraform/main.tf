@@ -1,4 +1,4 @@
-# Scenario 6 - Condition A - Manual - IAM Role 
+# Scenario 12 - Condition A - Manual - EC2 Web Server
 terraform {
   required_providers {
     aws = {
@@ -12,43 +12,55 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_iam_role" "s6_manual_ec2" {
-  name = "manual-s6-ec2-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect    = "Allow"
-        Principal = { Service = "ec2.amazonaws.com" }
-        Action    = "sts:AssumeRole"
-      }
-    ]
-  })
-
-  tags = {
-    Project  = "dissertation"
-    Scenario = "S6-Manual"
+data "aws_ami" "amazon_linux" {
+  most_recent = true
+  owners      = ["amazon"]
+  filter {
+    name   = "name"
+    values = ["al2023-ami-*-x86_64"]
   }
 }
 
+resource "aws_security_group" "s12_manual" {
+  name_prefix = "manual-s12-"
+  description = "Web server security group"
 
-resource "aws_iam_role_policy_attachment" "s6_manual_s3" {
-  role       = aws_iam_role.s6_manual_ec2.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonS3FullAccess"
-}
+  ingress {
+    description = "SSH restricted"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["10.0.0.0/8"]
+  }
 
-resource "aws_iam_role_policy_attachment" "s6_manual_cw_logs" {
-  role       = aws_iam_role.s6_manual_ec2.name
-  policy_arn = "arn:aws:iam::aws:policy/CloudWatchFullAccess"
-}
+  ingress {
+    description = "HTTP from anywhere"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 
-resource "aws_iam_instance_profile" "s6_manual" {
-  name = "manual-s6-ec2-instance-profile"
-  role = aws_iam_role.s6_manual_ec2.name
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S6-Manual"
+    Scenario = "S12-Manual"
+  }
+}
+
+resource "aws_instance" "s12_manual" {
+  ami                    = data.aws_ami.amazon_linux.id
+  instance_type          = "t2.micro"
+  vpc_security_group_ids = [aws_security_group.s12_manual.id]
+
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S12-Manual"
   }
 }
