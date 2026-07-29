@@ -5,7 +5,7 @@ import requests
 from datetime import datetime
 
 
-REPAIR_AGENT_VERSION = "v13-2026-07-28-retain-best-partial-fix"
+REPAIR_AGENT_VERSION = "v14-2026-07-28-iam-profile-and-no-stray-vars"
 
 # Only cross-region replication is excluded. Unlike KMS keys, Secrets
 # Manager, Multi-AZ, enhanced monitoring, or SG-attachment fixes -
@@ -309,6 +309,25 @@ STRICT RULES:
     bare key ID. Also, the correct argument name for setting a custom key
     policy on aws_kms_key is "policy", NOT "key_policy" - "key_policy" is
     not a valid argument for this resource.
+23. EC2 IAM ATTACHMENT: an aws_instance's "iam_instance_profile" argument
+    MUST reference an aws_iam_instance_profile resource's .name attribute
+    (e.g. aws_iam_instance_profile.NAME.name) - NEVER an aws_iam_role's
+    name or ARN directly. AWS requires an instance profile as a separate
+    wrapper resource around a role; a role cannot be attached to an EC2
+    instance directly. If you add an aws_iam_role to satisfy an
+    "IAM role attached to EC2" finding, you MUST also add a matching
+    aws_iam_instance_profile resource (with role = aws_iam_role.NAME.name)
+    and reference THAT instance profile's .name on the instance - never
+    the role's name.
+24. DO NOT introduce any "variable" block, or any other new required
+    input, unless the SECURITY FINDINGS list above actually contains a
+    hardcoded-secret finding (e.g. CKV_SECRET_2, CKV_SECRET_6, CKV_AWS_45)
+    for THIS specific scenario. This pipeline has no mechanism to supply
+    -var values, so any required variable with no default will cause
+    `terraform plan` to fail immediately for every remaining attempt. If
+    the findings list does not include a secrets-related check, do not
+    add, reference, or reason about credentials/passwords/variables at
+    all - focus only on the findings actually listed above.
 """
 
 
