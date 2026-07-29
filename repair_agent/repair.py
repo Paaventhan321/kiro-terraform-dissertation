@@ -5,7 +5,7 @@ import requests
 from datetime import datetime
 
 
-REPAIR_AGENT_VERSION = "v15-2026-07-28-programmatic-rule-enforcement"
+REPAIR_AGENT_VERSION = "v16-2026-07-28-exclude-secrets-pipeline-limit"
 
 # Only cross-region replication is excluded. Unlike KMS keys, Secrets
 # Manager, Multi-AZ, enhanced monitoring, or SG-attachment fixes -
@@ -22,6 +22,20 @@ COST_RESTRICTED_CHECK_IDS = {
                      # incurred immediately on replication, not undone by
                      # fast teardown; destroy can also be blocked without
                      # force_destroy, leaving the 2nd-region bucket live.
+}
+
+# Findings excluded for a DIFFERENT reason than cost: this pipeline has
+# no mechanism to supply Terraform -var values (no TF_VAR_* env vars, no
+# -var-file). The "correct" fix for hardcoded secrets is a sensitive
+# variable with no default - but that makes `terraform plan` fail
+# immediately with "No value for required variable" on every attempt,
+# regardless of whether the fix is otherwise correct. Until the pipeline
+# itself is extended with a secret-injection mechanism, these findings
+# cannot be automatically verified, so they are excluded here.
+PIPELINE_INCOMPATIBLE_CHECK_IDS = {
+    "CKV_SECRET_2",
+    "CKV_SECRET_6",
+    "CKV_AWS_45",
 }
 
 
@@ -164,22 +178,19 @@ def check_forbidden_patterns(hcl_code, attempt_findings):
                 "for findings that are actually listed."
             )
 
-    # Any "variable" block should only appear if a secrets-related
-    # finding is actually present - otherwise it's an unrelated
-    # hallucination that will break `terraform plan` in this pipeline,
-    # since no -var values are ever supplied.
-    secrets_findings_present = bool(
-        attempt_check_ids & {"CKV_SECRET_2", "CKV_SECRET_6", "CKV_AWS_45", "CKV_AWS_173"}
-    )
-    if not secrets_findings_present and "variable \"" in code_lower:
+    # Any "variable" block is ALWAYS forbidden now - secrets findings
+    # are filtered out (see PIPELINE_INCOMPATIBLE_CHECK_IDS) before this
+    # function is ever called, so there is never a legitimate reason for
+    # the LLM to introduce one. A required variable with no default will
+    # break `terraform plan` in this pipeline, since no -var values are
+    # ever supplied.
+    if "variable \"" in code_lower:
         violations.append(
-            "Code introduces a Terraform 'variable' block, but no "
-            "secrets-related finding (e.g. CKV_SECRET_6, CKV_AWS_45) is "
-            "in the current findings list for this scenario. Do not "
-            "introduce variables unrelated to an actual finding - this "
-            "pipeline has no mechanism to supply -var values, so any "
-            "required variable with no default will break every "
-            "subsequent attempt."
+            "Code introduces a Terraform 'variable' block. This is "
+            "never permitted - this pipeline has no mechanism to supply "
+            "-var values, so any required variable with no default will "
+            "break every subsequent attempt regardless of the reason it "
+            "was added."
         )
 
     # KMS key resources should only appear if a KMS-related finding is
@@ -251,7 +262,8 @@ def classify_failures(checkov_results):
         }
         classified[severity].append(entry)
 
-        if entry["check_id"] in COST_RESTRICTED_CHECK_IDS:
+        if entry["check_id"] in COST_RESTRICTED_CHECK_IDS or \
+           entry["check_id"] in PIPELINE_INCOMPATIBLE_CHECK_IDS:
             skipped_list.append(entry)
         else:
             attempt_list.append(entry)
@@ -287,17 +299,18 @@ SECURITY FINDINGS TO FIX:
 {error_section}
 STRICT RULES:
 1. Fix ALL security issues listed above
-2. Do NOT use placeholder values for anything EXCEPT credentials/secrets -
-   see rule 4 below for the correct way to handle hardcoded secrets.
+2. Do NOT use placeholder values for anything.
 3. Use 10.0.0.0/8 for restricted SSH/network CIDR blocks unless the
    findings specify otherwise.
-4. HARDCODED SECRETS: if a finding flags a hardcoded password/key/token
-   (e.g. CKV_SECRET_6, CKV_AWS_45), do NOT invent a different hardcoded
-   value. Instead, replace it with a Terraform variable reference (e.g.
-   var.db_password), and add a matching "variable" block marked
-   sensitive = true with NO default value. Do NOT create an
-   aws_secretsmanager_secret resource unless a finding specifically
-   requires it - the variable approach is the minimal, no-new-resource fix.
+4. HARDCODED SECRETS: findings related to hardcoded secrets (e.g.
+   CKV_SECRET_6, CKV_AWS_45) are filtered out before reaching you and
+   will NOT appear in the findings list below - do not attempt to fix
+   them even if you notice a hardcoded value elsewhere in the code. This
+   is because the correct fix (a Terraform variable with no default)
+   cannot be verified in this pipeline, which has no mechanism to supply
+   variable values, and would break every subsequent attempt. If you
+   somehow see a secrets-related finding in the list below, do NOT
+   introduce any "variable" block to fix it - leave it unresolved.
 5. Do NOT add replication configuration (aws_s3_bucket_replication_configuration)
    under any circumstances - this is the one finding type excluded from
    automated repair, because its cost (cross-region data transfer) is
@@ -397,14 +410,12 @@ STRICT RULES:
     and reference THAT instance profile's .name on the instance - never
     the role's name.
 24. DO NOT introduce any "variable" block, or any other new required
-    input, unless the SECURITY FINDINGS list above actually contains a
-    hardcoded-secret finding (e.g. CKV_SECRET_2, CKV_SECRET_6, CKV_AWS_45)
-    for THIS specific scenario. This pipeline has no mechanism to supply
-    -var values, so any required variable with no default will cause
-    `terraform plan` to fail immediately for every remaining attempt. If
-    the findings list does not include a secrets-related check, do not
-    add, reference, or reason about credentials/passwords/variables at
-    all - focus only on the findings actually listed above.
+    input with no default value, under any circumstances. This pipeline
+    has no mechanism to supply -var values, so any required variable
+    with no default will cause `terraform plan` to fail immediately for
+    every remaining attempt. Do not add, reference, or reason about
+    credentials/passwords/variables at all - focus only on the findings
+    actually listed above.
 """
 
 
@@ -668,9 +679,11 @@ def main():
     print(f"Medium: {len(classified['MEDIUM'])}")
     print(f"Low: {len(classified['LOW'])}")
     print(f"Attemptable: {len(attempt_findings)}")
-    print(f"Skipped (replication only, NOT attempted): {len(skipped_findings)}")
+    print(f"Skipped (replication + secrets, NOT attempted): {len(skipped_findings)}")
     if skipped_findings:
-        print("The following findings were deliberately SKIPPED due to cost risk:")
+        print("The following findings were deliberately SKIPPED (replication "
+              "due to cost risk; secrets findings due to pipeline "
+              "incompatibility - no mechanism to supply variable values):")
         for f in skipped_findings:
             print(f"  - {f['check_id']}: {f['check_name']}")
 
