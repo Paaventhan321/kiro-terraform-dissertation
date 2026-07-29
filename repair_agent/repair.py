@@ -5,7 +5,7 @@ import requests
 from datetime import datetime
 
 
-REPAIR_AGENT_VERSION = "v14-2026-07-28-iam-profile-and-no-stray-vars"
+REPAIR_AGENT_VERSION = "v15-2026-07-28-programmatic-rule-enforcement"
 
 # Only cross-region replication is excluded. Unlike KMS keys, Secrets
 # Manager, Multi-AZ, enhanced monitoring, or SG-attachment fixes -
@@ -118,6 +118,83 @@ def run_json_command(command_list, cwd, timeout, temp_filename, temp_dir=None):
         return None, None, "Command timed out."
     except Exception as e:
         return None, None, f"Unexpected error running command: {e}"
+
+
+def check_forbidden_patterns(hcl_code, attempt_findings):
+    """
+    Programmatically inspects the LLM's returned HCL for known
+    rule-violating patterns, INSTEAD OF just trusting the prompt
+    instructions to be followed. This directly addresses a demonstrated
+    limitation: the LLM has been observed ignoring explicit "do not do X"
+    prompt rules (e.g. adding enhanced monitoring + a new IAM role in
+    Scenario 5 despite being told not to). Rather than hoping the next
+    attempt behaves, this rejects the violating code OUTRIGHT, before it
+    is ever deployed to real AWS infrastructure - saving both the cost
+    of deploying something that will just be reverted, and closing the
+    gap between "instructed not to" and "actually did not".
+
+    Returns a list of violation description strings (empty list = clean).
+    """
+    violations = []
+    attempt_check_ids = set(f.get("check_id") for f in attempt_findings)
+    code_lower = hcl_code.lower()
+
+    # ALWAYS forbidden, regardless of findings - replication cost cannot
+    # be undone by destroy, so this is never permitted under any ruleset.
+    if "aws_s3_bucket_replication_configuration" in code_lower:
+        violations.append(
+            "Code contains aws_s3_bucket_replication_configuration, which "
+            "is NEVER permitted under any circumstances (cross-region "
+            "replication cost is incurred immediately and cannot be "
+            "undone by destroying the resource afterward)."
+        )
+
+    # Enhanced monitoring / new IAM role for monitoring should only
+    # appear if a monitoring-related finding is actually in scope.
+    monitoring_findings_present = bool(
+        attempt_check_ids & {"CKV_AWS_118"}
+    )
+    if not monitoring_findings_present:
+        if "monitoring_interval" in code_lower or "monitoring_role_arn" in code_lower:
+            violations.append(
+                "Code adds RDS enhanced monitoring (monitoring_interval / "
+                "monitoring_role_arn), but no monitoring-related finding "
+                "(e.g. CKV_AWS_118) is in the current findings list for "
+                "this scenario. This is not permitted - only add fixes "
+                "for findings that are actually listed."
+            )
+
+    # Any "variable" block should only appear if a secrets-related
+    # finding is actually present - otherwise it's an unrelated
+    # hallucination that will break `terraform plan` in this pipeline,
+    # since no -var values are ever supplied.
+    secrets_findings_present = bool(
+        attempt_check_ids & {"CKV_SECRET_2", "CKV_SECRET_6", "CKV_AWS_45", "CKV_AWS_173"}
+    )
+    if not secrets_findings_present and "variable \"" in code_lower:
+        violations.append(
+            "Code introduces a Terraform 'variable' block, but no "
+            "secrets-related finding (e.g. CKV_SECRET_6, CKV_AWS_45) is "
+            "in the current findings list for this scenario. Do not "
+            "introduce variables unrelated to an actual finding - this "
+            "pipeline has no mechanism to supply -var values, so any "
+            "required variable with no default will break every "
+            "subsequent attempt."
+        )
+
+    # KMS key resources should only appear if a KMS-related finding is
+    # actually in scope.
+    kms_findings_present = bool(
+        attempt_check_ids & {"CKV_AWS_145", "CKV_AWS_16", "CKV_AWS_354"}
+    )
+    if not kms_findings_present and "aws_kms_key" in code_lower:
+        violations.append(
+            "Code adds an aws_kms_key resource, but no KMS-related "
+            "finding is in the current findings list for this scenario. "
+            "Only add a KMS key if a listed finding actually requires it."
+        )
+
+    return violations
 
 
 def read_checkov_results():
@@ -647,6 +724,24 @@ def main():
         is_valid, error_text = validate_terraform("terraform")
 
         if is_valid:
+            # NEW: check the code for known rule violations BEFORE
+            # spending time/cost on a real deployment. This is a hard,
+            # programmatic check - not a prompt request - so it actually
+            # enforces restrictions the LLM has been observed ignoring.
+            violations = check_forbidden_patterns(fixed_code, attempt_findings)
+            if violations:
+                violation_text = "\n".join(f"- {v}" for v in violations)
+                print(f"Attempt {attempt}: Code passed terraform validate, "
+                      f"but VIOLATES enforced restrictions:\n{violation_text}")
+                terraform_code = fixed_code
+                previous_error = (
+                    f"Your previous response violated these hard "
+                    f"restrictions and was REJECTED before deployment:\n"
+                    f"{violation_text}\nYou MUST remove these violations "
+                    f"in your next response."
+                )
+                continue
+
             print(f"Attempt {attempt}: Code is syntactically VALID. "
                   f"Testing real deployment with terraform apply...")
             apply_success, apply_error = apply_terraform("terraform")
