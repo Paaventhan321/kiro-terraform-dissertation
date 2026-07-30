@@ -40,3 +40,4 @@ resource "aws_db_instance" "s13_kiro" {
     Scenario = "S13-Kiro"
   }
 }
+
