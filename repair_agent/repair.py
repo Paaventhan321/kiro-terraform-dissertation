@@ -5,7 +5,7 @@ import requests
 from datetime import datetime
 
 
-REPAIR_AGENT_VERSION = "v16-2026-07-28-exclude-secrets-pipeline-limit"
+REPAIR_AGENT_VERSION = "v18-2026-07-30-proactive-flowlogs-cloudtrail-iam"
 
 # Only cross-region replication is excluded. Unlike KMS keys, Secrets
 # Manager, Multi-AZ, enhanced monitoring, or SG-attachment fixes -
@@ -193,6 +193,18 @@ def check_forbidden_patterns(hcl_code, attempt_findings):
             "was added."
         )
 
+    # Also catch bare "var.xxx" references even without a declared
+    # variable block - this is equally broken (an undeclared reference
+    # error) and has been observed to occur even when no "variable"
+    # block is present.
+    import re as _re
+    if _re.search(r'\bvar\.[a-zA-Z_][a-zA-Z0-9_]*', hcl_code):
+        violations.append(
+            "Code contains a 'var.xxx' reference. Do not reference any "
+            "Terraform input variable, declared or not - this pipeline "
+            "cannot supply variable values under any circumstances."
+        )
+
     # KMS key resources should only appear if a KMS-related finding is
     # actually in scope.
     kms_findings_present = bool(
@@ -203,6 +215,18 @@ def check_forbidden_patterns(hcl_code, attempt_findings):
             "Code adds an aws_kms_key resource, but no KMS-related "
             "finding is in the current findings list for this scenario. "
             "Only add a KMS key if a listed finding actually requires it."
+        )
+
+    # This exact typo has recurred twice (Scenario 5, Scenario 13) -
+    # catch it programmatically as a hard backstop, not just a prompt
+    # request, since the LLM has repeated it even after being told once.
+    if "enable_cloudwatch_logs_exports" in code_lower and \
+       "enabled_cloudwatch_logs_exports" not in code_lower:
+        violations.append(
+            "Code uses 'enable_cloudwatch_logs_exports' (missing the "
+            "'d'), which is NOT a valid Terraform argument. The correct "
+            "argument name is 'enabled_cloudwatch_logs_exports'. Fix "
+            "the spelling exactly."
         )
 
     return violations
@@ -416,6 +440,59 @@ STRICT RULES:
     every remaining attempt. Do not add, reference, or reason about
     credentials/passwords/variables at all - focus only on the findings
     actually listed above.
+25. RDS LOGGING ARGUMENT NAME: the correct Terraform argument for
+    enabling RDS log exports to CloudWatch is EXACTLY
+    "enabled_cloudwatch_logs_exports" (plural "exports", "enabled" not
+    "enable"). It is a list of strings, e.g. for postgres:
+    enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
+    for mysql:
+    enabled_cloudwatch_logs_exports = ["error", "general", "slowquery"]
+    Do NOT use "enable_cloudwatch_logs_exports" (missing the "d") or any
+    other variation - this exact typo has caused repeated validation
+    failures. Double-check the spelling character-by-character before
+    returning your response.
+26. VPC FLOW LOGS: if a finding requires VPC flow logs (e.g. CKV2_AWS_11,
+    CKV2_AWS_19), use exactly this pattern, logging to S3 (simplest,
+    avoids needing a CloudWatch log group + IAM role):
+
+      resource "aws_flow_log" "NAME" {{
+        vpc_id               = aws_vpc.EXISTING_VPC.id
+        traffic_type         = "ALL"
+        log_destination_type = "s3"
+        log_destination      = aws_s3_bucket.NEW_LOG_BUCKET.arn
+      }}
+
+    You MUST also declare the aws_s3_bucket.NEW_LOG_BUCKET resource
+    referenced above in the same file if it does not already exist -
+    never leave this reference dangling.
+27. CLOUDTRAIL: if a finding requires CloudTrail (e.g. for audit
+    logging), use exactly this pattern:
+
+      resource "aws_cloudtrail" "NAME" {{
+        name                          = "some-name"
+        s3_bucket_name                = aws_s3_bucket.EXISTING_OR_NEW_BUCKET.id
+        include_global_service_events = true
+        is_multi_region_trail         = true
+        enable_log_file_validation    = true
+      }}
+
+    The S3 bucket referenced by s3_bucket_name MUST have a bucket policy
+    granting cloudtrail.amazonaws.com permission to write to it (AWS
+    requires this or CloudTrail creation will fail at apply time) - add
+    an aws_s3_bucket_policy resource granting s3:GetBucketAcl and
+    s3:PutObject to the Service principal "cloudtrail.amazonaws.com" for
+    that specific bucket if one does not already exist.
+28. IAM LEAST PRIVILEGE FOR SPECIFIC-RESOURCE ACCESS: if the ORIGINAL
+    SPECIFICATION (not just the Checkov findings) describes access to a
+    named, specific resource (e.g. "read from one specific DynamoDB
+    table", "read from a specific S3 bucket"), and the given code
+    instead uses a broad AWS-managed policy (e.g. AmazonDynamoDBReadOnlyAccess
+    covering ALL tables), you may replace it with an inline
+    aws_iam_role_policy scoped to only the specific resource's ARN, using
+    minimal required actions (e.g. dynamodb:GetItem, dynamodb:Query,
+    dynamodb:Scan for read-only DynamoDB access) - but ONLY if a
+    corresponding Checkov finding is actually present in this scenario's
+    findings list. Do not do this speculatively if no finding requires it.
 """
 
 
@@ -571,7 +648,7 @@ def apply_terraform(terraform_dir="terraform"):
 
         apply_result = subprocess.run(
             ["terraform", "apply", "-auto-approve", "tfplan"],
-            cwd=terraform_dir, capture_output=True, text=True, timeout=300
+            cwd=terraform_dir, capture_output=True, text=True, timeout=900
         )
 
         if apply_result.returncode == 0:
@@ -587,7 +664,7 @@ def apply_terraform(terraform_dir="terraform"):
                 target_flags += ["-target", addr]
             destroy_result = subprocess.run(
                 ["terraform", "destroy", "-auto-approve"] + target_flags,
-                cwd=terraform_dir, capture_output=True, text=True, timeout=300
+                cwd=terraform_dir, capture_output=True, text=True, timeout=900
             )
             if destroy_result.returncode != 0:
                 print("WARNING: targeted cleanup failed. Manual cleanup may "
