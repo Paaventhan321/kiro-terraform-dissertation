@@ -6,7 +6,7 @@ import requests
 from datetime import datetime
 
 
-REPAIR_AGENT_VERSION = "v19-2026-07-30-redact-password-dup-resource-check"
+REPAIR_AGENT_VERSION = "v20-2026-07-30-remove-password-field-entirely"
 
 # Only cross-region replication is excluded. Unlike KMS keys, Secrets
 # Manager, Multi-AZ, enhanced monitoring, or SG-attachment fixes -
@@ -135,50 +135,75 @@ def run_json_command(command_list, cwd, timeout, temp_filename, temp_dir=None):
         return None, None, f"Unexpected error running command: {e}"
 
 
-_PASSWORD_PLACEHOLDER = "DO_NOT_MODIFY_THIS_EXACT_LINE_password_placeholder"
-
-
 def redact_password(hcl_code):
     """
-    Replaces any `password = "..."` value with a fixed placeholder
-    before sending code to the LLM. This is the PERMANENT fix for the
-    LLM repeatedly noticing a hardcoded password in the code and trying
-    to "fix" it with a Terraform variable, even after being explicitly
-    told not to (observed repeatedly across Scenario 12 and Scenario
-    13). Simply asking it not to touch the password was insufficient;
-    removing the actual value from what it sees removes the temptation
-    at the source, since Checkov's CKV_SECRET_6/CKV_AWS_45 findings are
-    already excluded from the fixable scope (see
-    PIPELINE_INCOMPATIBLE_CHECK_IDS) and were never meant to be touched.
-    Returns (redacted_code, original_password_or_None).
+    Removes the ENTIRE password line (not just its value) from what the
+    LLM sees, including the "password" field name itself. This is a
+    stronger fix than merely masking the value: testing showed the LLM
+    reacts to the mere PRESENCE of a field literally named "password"
+    (regardless of what value is shown) by trying to "fix" it with a
+    Terraform variable, even when explicitly told not to and even when
+    the actual value was already masked. Removing the field entirely
+    means there is nothing resembling a password argument left for the
+    model to react to at all.
+
+    Returns (redacted_code, original_password_line_or_None,
+    resource_type_or_None, resource_name_or_None) - the resource
+    type/name are captured so the line can be surgically reinserted
+    into the correct resource block afterward.
     """
-    match = re.search(r'password\s*=\s*"([^"]*)"', hcl_code)
-    if not match:
-        return hcl_code, None
-    original_password = match.group(1)
-    redacted_code = re.sub(
-        r'password\s*=\s*"[^"]*"',
-        f'password = "{_PASSWORD_PLACEHOLDER}"',
-        hcl_code,
-        count=1
-    )
-    return redacted_code, original_password
+    lines = hcl_code.split("\n")
+    password_line_idx = None
+    for i, line in enumerate(lines):
+        if re.match(r'^\s*password\s*=\s*"', line):
+            password_line_idx = i
+            break
+
+    if password_line_idx is None:
+        return hcl_code, None, None, None
+
+    original_line = lines[password_line_idx]
+
+    resource_type, resource_name = None, None
+    for j in range(password_line_idx, -1, -1):
+        match = re.match(
+            r'\s*resource\s+"([a-zA-Z0-9_]+)"\s+"([a-zA-Z0-9_]+)"\s*{',
+            lines[j]
+        )
+        if match:
+            resource_type, resource_name = match.group(1), match.group(2)
+            break
+
+    del lines[password_line_idx]
+    redacted_code = "\n".join(lines)
+    return redacted_code, original_line, resource_type, resource_name
 
 
-def restore_password(hcl_code, original_password):
+def restore_password(hcl_code, original_line, resource_type, resource_name):
     """
-    Restores the real password value after the LLM has returned its
-    fix, replacing the placeholder it should have left untouched. If
-    the placeholder is no longer present (the LLM altered that line
-    anyway), this is a no-op and the enforcement checks in
-    check_forbidden_patterns remain as a backstop.
+    Re-inserts the real password line back into the correct resource
+    block after the LLM's response, using the resource type/name
+    captured during redaction to find the right block even if
+    surrounding lines were reordered or changed.
     """
-    if original_password is None:
+    if original_line is None:
         return hcl_code
-    return hcl_code.replace(
-        f'password = "{_PASSWORD_PLACEHOLDER}"',
-        f'password = "{original_password}"'
-    )
+
+    lines = hcl_code.split("\n")
+    for j, line in enumerate(lines):
+        match = re.match(
+            rf'\s*resource\s+"{re.escape(resource_type)}"\s+"{re.escape(resource_name)}"\s*{{',
+            line
+        )
+        if match:
+            lines.insert(j + 1, original_line)
+            return "\n".join(lines)
+
+    # Fallback: the resource block was renamed or restructured beyond
+    # recognition. Leave as-is; validate_terraform will catch the
+    # missing required "password" argument and report a clear error
+    # that gets fed back into the next attempt.
+    return hcl_code
 
 
 def check_forbidden_patterns(hcl_code, attempt_findings):
@@ -559,6 +584,12 @@ STRICT RULES:
     dynamodb:Scan for read-only DynamoDB access) - but ONLY if a
     corresponding Checkov finding is actually present in this scenario's
     findings list. Do not do this speculatively if no finding requires it.
+29. Do NOT add an aws_kms_key resource, or any KMS-related argument,
+    UNLESS a KMS-related finding (e.g. CKV_AWS_145, CKV_AWS_16 when it
+    specifically requires KMS rather than default encryption) is
+    actually present in the findings list above for THIS attempt. Adding
+    a speculative KMS key "to be safe" when no finding requires it is
+    NOT permitted and will be rejected before deployment.
 """
 
 
@@ -867,7 +898,7 @@ def main():
         attempt += 1
         print(f"Repair attempt {attempt} of {max_attempts}...")
 
-        redacted_code, original_password = redact_password(terraform_code)
+        redacted_code, original_password_line, pw_resource_type, pw_resource_name = redact_password(terraform_code)
         prompt = build_prompt(redacted_code, attempt_findings, previous_error)
         fixed_code = call_repair_agent(prompt)
 
@@ -875,7 +906,7 @@ def main():
             print(f"Attempt {attempt}: Repair failed (no code returned).")
             continue
 
-        fixed_code = restore_password(fixed_code, original_password)
+        fixed_code = restore_password(fixed_code, original_password_line, pw_resource_type, pw_resource_name)
 
         with open("terraform/main.tf", "w") as f:
             f.write(fixed_code)
