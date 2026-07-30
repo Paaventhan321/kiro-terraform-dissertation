@@ -6,7 +6,7 @@ import requests
 from datetime import datetime
 
 
-REPAIR_AGENT_VERSION = "v20-2026-07-30-remove-password-field-entirely"
+REPAIR_AGENT_VERSION = "v21-2026-07-30-enforce-single-password-line"
 
 # Only cross-region replication is excluded. Unlike KMS keys, Secrets
 # Manager, Multi-AZ, enhanced monitoring, or SG-attachment fixes -
@@ -135,22 +135,32 @@ def run_json_command(command_list, cwd, timeout, temp_filename, temp_dir=None):
         return None, None, f"Unexpected error running command: {e}"
 
 
-def redact_password(hcl_code):
+def find_resource_block_range(lines, resource_type, resource_name):
     """
-    Removes the ENTIRE password line (not just its value) from what the
-    LLM sees, including the "password" field name itself. This is a
-    stronger fix than merely masking the value: testing showed the LLM
-    reacts to the mere PRESENCE of a field literally named "password"
-    (regardless of what value is shown) by trying to "fix" it with a
-    Terraform variable, even when explicitly told not to and even when
-    the actual value was already masked. Removing the field entirely
-    means there is nothing resembling a password argument left for the
-    model to react to at all.
+    Finds the (start, end) line indices (inclusive) of a resource block,
+    using brace-depth counting to correctly handle nested blocks (e.g.
+    tags {}, backup settings, etc.) inside the resource.
+    """
+    for i, line in enumerate(lines):
+        match = re.match(
+            rf'\s*resource\s+"{re.escape(resource_type)}"\s+"{re.escape(resource_name)}"\s*{{',
+            line
+        )
+        if match:
+            depth = line.count("{") - line.count("}")
+            j = i
+            while depth > 0 and j + 1 < len(lines):
+                j += 1
+                depth += lines[j].count("{") - lines[j].count("}")
+            return i, j
+    return None, None
 
-    Returns (redacted_code, original_password_line_or_None,
-    resource_type_or_None, resource_name_or_None) - the resource
-    type/name are captured so the line can be surgically reinserted
-    into the correct resource block afterward.
+
+def find_password_line(hcl_code):
+    """
+    Locates the first `password = "..."` line and the resource block it
+    belongs to. Returns (original_line, resource_type, resource_name) or
+    (None, None, None) if no password line is found.
     """
     lines = hcl_code.split("\n")
     password_line_idx = None
@@ -158,12 +168,10 @@ def redact_password(hcl_code):
         if re.match(r'^\s*password\s*=\s*"', line):
             password_line_idx = i
             break
-
     if password_line_idx is None:
-        return hcl_code, None, None, None
+        return None, None, None
 
     original_line = lines[password_line_idx]
-
     resource_type, resource_name = None, None
     for j in range(password_line_idx, -1, -1):
         match = re.match(
@@ -173,37 +181,46 @@ def redact_password(hcl_code):
         if match:
             resource_type, resource_name = match.group(1), match.group(2)
             break
-
-    del lines[password_line_idx]
-    redacted_code = "\n".join(lines)
-    return redacted_code, original_line, resource_type, resource_name
+    return original_line, resource_type, resource_name
 
 
-def restore_password(hcl_code, original_line, resource_type, resource_name):
+def enforce_correct_password(hcl_code, correct_password_line, resource_type, resource_name):
     """
-    Re-inserts the real password line back into the correct resource
-    block after the LLM's response, using the resource type/name
-    captured during redaction to find the right block even if
-    surrounding lines were reordered or changed.
+    GUARANTEES exactly one, correct password assignment inside the
+    given resource block, regardless of what the LLM did.
+
+    Earlier approaches tried to prevent the LLM from ever seeing or
+    reacting to the password field, but this failed in two different
+    ways: (1) masking only the value still let the LLM try to replace
+    it with a Terraform variable, and (2) removing the field entirely
+    caused the LLM to independently reintroduce ITS OWN password
+    argument (since aws_db_instance requires one), which then collided
+    with the real line being reinserted, causing a duplicate-attribute
+    error. This function takes a different approach: let the LLM see
+    and do whatever it wants with the password field, then
+    UNCONDITIONALLY strip every password line within that specific
+    resource block afterward and insert exactly one correct line -
+    guaranteeing correctness regardless of the LLM's behavior.
     """
-    if original_line is None:
+    if resource_type is None or correct_password_line is None:
         return hcl_code
 
     lines = hcl_code.split("\n")
-    for j, line in enumerate(lines):
-        match = re.match(
-            rf'\s*resource\s+"{re.escape(resource_type)}"\s+"{re.escape(resource_name)}"\s*{{',
-            line
-        )
-        if match:
-            lines.insert(j + 1, original_line)
-            return "\n".join(lines)
+    start, end = find_resource_block_range(lines, resource_type, resource_name)
+    if start is None:
+        # Resource block not found (renamed beyond recognition) - leave
+        # as-is; validate_terraform will report a clear missing-password
+        # error that gets fed back into the next attempt.
+        return hcl_code
 
-    # Fallback: the resource block was renamed or restructured beyond
-    # recognition. Leave as-is; validate_terraform will catch the
-    # missing required "password" argument and report a clear error
-    # that gets fed back into the next attempt.
-    return hcl_code
+    new_lines = []
+    for idx, line in enumerate(lines):
+        if start <= idx <= end and re.match(r'^\s*password\s*=', line):
+            continue  # drop every password line found inside this block
+        new_lines.append(line)
+
+    new_lines.insert(start + 1, correct_password_line)
+    return "\n".join(new_lines)
 
 
 def check_forbidden_patterns(hcl_code, attempt_findings):
@@ -898,15 +915,17 @@ def main():
         attempt += 1
         print(f"Repair attempt {attempt} of {max_attempts}...")
 
-        redacted_code, original_password_line, pw_resource_type, pw_resource_name = redact_password(terraform_code)
-        prompt = build_prompt(redacted_code, attempt_findings, previous_error)
+        original_password_line, pw_resource_type, pw_resource_name = find_password_line(terraform_code)
+        prompt = build_prompt(terraform_code, attempt_findings, previous_error)
         fixed_code = call_repair_agent(prompt)
 
         if not fixed_code:
             print(f"Attempt {attempt}: Repair failed (no code returned).")
             continue
 
-        fixed_code = restore_password(fixed_code, original_password_line, pw_resource_type, pw_resource_name)
+        fixed_code = enforce_correct_password(
+            fixed_code, original_password_line, pw_resource_type, pw_resource_name
+        )
 
         with open("terraform/main.tf", "w") as f:
             f.write(fixed_code)
