@@ -1,4 +1,4 @@
-# Scenario 13 - Condition B - Kiro - RDS PostgreSQL Secure
+# Scenario 13 - Condition C - Kiro with repair - RDS PostgreSQL Secure
 terraform {
   required_providers {
     aws = {
