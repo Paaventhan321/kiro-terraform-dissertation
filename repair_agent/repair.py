@@ -1,11 +1,12 @@
 import json
 import os
+import re
 import subprocess
 import requests
 from datetime import datetime
 
 
-REPAIR_AGENT_VERSION = "v18-2026-07-30-proactive-flowlogs-cloudtrail-iam"
+REPAIR_AGENT_VERSION = "v19-2026-07-30-redact-password-dup-resource-check"
 
 # Only cross-region replication is excluded. Unlike KMS keys, Secrets
 # Manager, Multi-AZ, enhanced monitoring, or SG-attachment fixes -
@@ -134,6 +135,52 @@ def run_json_command(command_list, cwd, timeout, temp_filename, temp_dir=None):
         return None, None, f"Unexpected error running command: {e}"
 
 
+_PASSWORD_PLACEHOLDER = "DO_NOT_MODIFY_THIS_EXACT_LINE_password_placeholder"
+
+
+def redact_password(hcl_code):
+    """
+    Replaces any `password = "..."` value with a fixed placeholder
+    before sending code to the LLM. This is the PERMANENT fix for the
+    LLM repeatedly noticing a hardcoded password in the code and trying
+    to "fix" it with a Terraform variable, even after being explicitly
+    told not to (observed repeatedly across Scenario 12 and Scenario
+    13). Simply asking it not to touch the password was insufficient;
+    removing the actual value from what it sees removes the temptation
+    at the source, since Checkov's CKV_SECRET_6/CKV_AWS_45 findings are
+    already excluded from the fixable scope (see
+    PIPELINE_INCOMPATIBLE_CHECK_IDS) and were never meant to be touched.
+    Returns (redacted_code, original_password_or_None).
+    """
+    match = re.search(r'password\s*=\s*"([^"]*)"', hcl_code)
+    if not match:
+        return hcl_code, None
+    original_password = match.group(1)
+    redacted_code = re.sub(
+        r'password\s*=\s*"[^"]*"',
+        f'password = "{_PASSWORD_PLACEHOLDER}"',
+        hcl_code,
+        count=1
+    )
+    return redacted_code, original_password
+
+
+def restore_password(hcl_code, original_password):
+    """
+    Restores the real password value after the LLM has returned its
+    fix, replacing the placeholder it should have left untouched. If
+    the placeholder is no longer present (the LLM altered that line
+    anyway), this is a no-op and the enforcement checks in
+    check_forbidden_patterns remain as a backstop.
+    """
+    if original_password is None:
+        return hcl_code
+    return hcl_code.replace(
+        f'password = "{_PASSWORD_PLACEHOLDER}"',
+        f'password = "{original_password}"'
+    )
+
+
 def check_forbidden_patterns(hcl_code, attempt_findings):
     """
     Programmatically inspects the LLM's returned HCL for known
@@ -197,8 +244,7 @@ def check_forbidden_patterns(hcl_code, attempt_findings):
     # variable block - this is equally broken (an undeclared reference
     # error) and has been observed to occur even when no "variable"
     # block is present.
-    import re as _re
-    if _re.search(r'\bvar\.[a-zA-Z_][a-zA-Z0-9_]*', hcl_code):
+    if re.search(r'\bvar\.[a-zA-Z_][a-zA-Z0-9_]*', hcl_code):
         violations.append(
             "Code contains a 'var.xxx' reference. Do not reference any "
             "Terraform input variable, declared or not - this pipeline "
@@ -228,6 +274,26 @@ def check_forbidden_patterns(hcl_code, attempt_findings):
             "argument name is 'enabled_cloudwatch_logs_exports'. Fix "
             "the spelling exactly."
         )
+
+    # Detect duplicate resource declarations - a new failure mode where
+    # the LLM appends a second copy of an existing resource instead of
+    # cleanly replacing it in-place (e.g. two "resource aws_db_instance
+    # s13_kiro" blocks in the same file, causing a hard Terraform error).
+    resource_declarations = re.findall(
+        r'resource\s+"([a-zA-Z0-9_]+)"\s+"([a-zA-Z0-9_]+)"', hcl_code
+    )
+    seen = set()
+    for res_type, res_name in resource_declarations:
+        key = (res_type, res_name)
+        if key in seen:
+            violations.append(
+                f"Code declares resource \"{res_type}\" \"{res_name}\" "
+                f"more than once. You MUST return the corrected file as "
+                f"a single, complete REPLACEMENT of the given code - do "
+                f"not duplicate any existing resource block. Each "
+                f"resource type+name combination must appear exactly once."
+            )
+        seen.add(key)
 
     return violations
 
@@ -800,12 +866,16 @@ def main():
     while attempt < max_attempts and not fixed:
         attempt += 1
         print(f"Repair attempt {attempt} of {max_attempts}...")
-        prompt = build_prompt(terraform_code, attempt_findings, previous_error)
+
+        redacted_code, original_password = redact_password(terraform_code)
+        prompt = build_prompt(redacted_code, attempt_findings, previous_error)
         fixed_code = call_repair_agent(prompt)
 
         if not fixed_code:
             print(f"Attempt {attempt}: Repair failed (no code returned).")
             continue
+
+        fixed_code = restore_password(fixed_code, original_password)
 
         with open("terraform/main.tf", "w") as f:
             f.write(fixed_code)
