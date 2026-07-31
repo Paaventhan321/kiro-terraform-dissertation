@@ -6,7 +6,7 @@ import requests
 from datetime import datetime
 
 
-REPAIR_AGENT_VERSION = "v21-2026-07-30-enforce-single-password-line"
+REPAIR_AGENT_VERSION = "v22-2026-07-30-timeout-cleanup-and-increase"
 
 # Only cross-region replication is excluded. Unlike KMS keys, Secrets
 # Manager, Multi-AZ, enhanced monitoring, or SG-attachment fixes -
@@ -762,7 +762,7 @@ def apply_terraform(terraform_dir="terraform"):
 
         apply_result = subprocess.run(
             ["terraform", "apply", "-auto-approve", "tfplan"],
-            cwd=terraform_dir, capture_output=True, text=True, timeout=900
+            cwd=terraform_dir, capture_output=True, text=True, timeout=1500
         )
 
         if apply_result.returncode == 0:
@@ -778,7 +778,7 @@ def apply_terraform(terraform_dir="terraform"):
                 target_flags += ["-target", addr]
             destroy_result = subprocess.run(
                 ["terraform", "destroy", "-auto-approve"] + target_flags,
-                cwd=terraform_dir, capture_output=True, text=True, timeout=900
+                cwd=terraform_dir, capture_output=True, text=True, timeout=1500
             )
             if destroy_result.returncode != 0:
                 print("WARNING: targeted cleanup failed. Manual cleanup may "
@@ -790,7 +790,31 @@ def apply_terraform(terraform_dir="terraform"):
         return False, error_text
 
     except subprocess.TimeoutExpired:
-        return False, "terraform apply or destroy timed out."
+        print("terraform apply timed out. IMPORTANT: the underlying AWS "
+              "resources may have finished being created in the "
+              "background even though this client gave up waiting. "
+              "Attempting a best-effort cleanup of the planned resources...")
+        try:
+            if planned_addresses:
+                target_flags = []
+                for addr in planned_addresses:
+                    target_flags += ["-target", addr]
+                subprocess.run(
+                    ["terraform", "destroy", "-auto-approve"] + target_flags,
+                    cwd=terraform_dir, capture_output=True, text=True,
+                    timeout=1500
+                )
+        except Exception as cleanup_error:
+            print(f"WARNING: best-effort cleanup after timeout also failed "
+                  f"or timed out ({cleanup_error}). The underlying AWS "
+                  f"resource(s) may still exist and require MANUAL deletion "
+                  f"to avoid ongoing cost and to unblock future attempts "
+                  f"(e.g. a duplicate-identifier error on retry).")
+        return False, ("terraform apply timed out - a best-effort cleanup "
+                        "was attempted, but manually verify in the AWS "
+                        "console that no orphaned resources remain, since "
+                        "AWS may have finished creating them after this "
+                        "client gave up waiting.")
     except Exception as e:
         return False, f"Unexpected error running terraform apply: {e}"
 
