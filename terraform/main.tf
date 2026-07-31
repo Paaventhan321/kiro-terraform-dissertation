@@ -1,4 +1,4 @@
-# Scenario 13 - Condition C - Kiro with repair - RDS PostgreSQL Secure
+# Scenario 14 - Condition B - Kiro - Lambda IAM Least Privilege DynamoDB
 terraform {
   required_providers {
     aws = {
@@ -12,32 +12,55 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_db_instance" "s13_kiro" {
-  identifier        = "kiro-s13-postgres"
-  engine            = "postgres"
-  engine_version    = "16.3"
-  instance_class    = "db.t3.micro"
-  allocated_storage = 20
+data "aws_caller_identity" "current" {}
 
-  db_name  = "dissertation"
-  username = "dbadmin"
-  password = "changeme123"
+# ── IAM Role ──────────────────────────────────────────────────────────────────
 
-  publicly_accessible = false
-  storage_encrypted   = true
-  deletion_protection = true
-  skip_final_snapshot = false
-  final_snapshot_identifier = "kiro-s13-postgres-final-snapshot"
+resource "aws_iam_role" "s14_kiro_lambda" {
+  name = "kiro-s14-lambda-role"
 
-  backup_retention_period = 7
-  backup_window           = "03:00-04:00"
-  maintenance_window      = "mon:04:00-mon:05:00"
-
-  auto_minor_version_upgrade = true
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Service = "lambda.amazonaws.com" }
+        Action    = "sts:AssumeRole"
+      }
+    ]
+  })
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S13-Kiro"
+    Scenario = "S14-Kiro"
   }
 }
 
+# Basic Lambda execution (CloudWatch Logs)
+resource "aws_iam_role_policy_attachment" "s14_kiro_lambda_basic" {
+  role       = aws_iam_role.s14_kiro_lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+# Least-privilege inline policy — read-only on one specific DynamoDB table
+resource "aws_iam_role_policy" "s14_kiro_dynamodb_read" {
+  name = "kiro-s14-dynamodb-read-policy"
+  role = aws_iam_role.s14_kiro_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "DynamoDBReadOnly"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:Query",
+          "dynamodb:Scan",
+          "dynamodb:DescribeTable"
+        ]
+        Resource = "arn:aws:dynamodb:us-east-1:${data.aws_caller_identity.current.account_id}:table/dissertation-data-table"
+      }
+    ]
+  })
+}
