@@ -1,4 +1,4 @@
-# Scenario 14 - Condition A - Manual - IAM Least Privilege
+# Scenario 14 - Condition A - Manual - IAM with Mistakes
 terraform {
   required_providers {
     aws = {
@@ -32,25 +32,13 @@ resource "aws_iam_role" "s14_manual" {
   }
 }
 
-resource "aws_iam_policy" "s14_manual" {
-  name_prefix = "manual-s14-policy-"
-  description = "DynamoDB read only policy"
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "dynamodb:GetItem",
-        "dynamodb:Query",
-        "dynamodb:Scan"
-      ]
-      Resource = "arn:aws:dynamodb:us-east-1:*:table/my-table"
-    }]
-  })
-}
-
 resource "aws_iam_role_policy_attachment" "s14_manual" {
   role       = aws_iam_role.s14_manual.name
-  policy_arn = aws_iam_policy.s14_manual.arn
+  policy_arn = "arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess"
+}
+
+
+resource "aws_iam_role_policy_attachment" "s14_manual_lambda" {
+  role       = aws_iam_role.s14_manual.name
+  policy_arn = "arn:aws:iam::aws:policy/AWSLambda_FullAccess"
 }
