@@ -6,7 +6,7 @@ import requests
 from datetime import datetime
 
 
-REPAIR_AGENT_VERSION = "v24-2026-07-31-forbid-external-validation-resources"
+REPAIR_AGENT_VERSION = "v25-2026-07-31-signer-profile-dlq-iam-permission"
 
 # Only cross-region replication is excluded. Unlike KMS keys, Secrets
 # Manager, Multi-AZ, enhanced monitoring, or SG-attachment fixes -
@@ -742,6 +742,42 @@ STRICT RULES:
     simple argument/flag changes to resources that already exist in the
     given code. When in doubt, leave a finding unresolved rather than
     guessing at an unfamiliar resource type or schema.
+34. AWS SIGNER SIGNING PROFILE: if adding aws_signer_signing_profile for
+    Lambda code-signing (see rule 30), do NOT set a "signing_material"
+    argument/block. For the standard "AWSLambda-SHA384-ECDSA" platform_id,
+    AWS automatically manages signing material internally and REJECTS
+    the deployment if signing_material is explicitly provided. Use only:
+
+      resource "aws_signer_signing_profile" "NAME" {{
+        platform_id = "AWSLambda-SHA384-ECDSA"
+      }}
+
+    Nothing else is required or permitted in this resource for this
+    platform.
+35. DEAD LETTER QUEUE (DLQ) IAM PERMISSIONS: if you add a
+    dead_letter_config block to an aws_lambda_function pointing to an
+    aws_sns_topic or aws_sqs_queue, you MUST also grant the Lambda's
+    execution role permission to publish to that specific target, or
+    the Lambda deployment will fail with "execution role does not have
+    permissions to call Publish on SNS" (or SendMessage for SQS). Add an
+    inline aws_iam_role_policy on the SAME role already used by the
+    Lambda function, scoped to only that specific target's ARN, e.g.:
+
+      resource "aws_iam_role_policy" "NAME_dlq_publish" {{
+        role = aws_iam_role.EXISTING_LAMBDA_ROLE.id
+        policy = jsonencode({{
+          Version = "2012-10-17"
+          Statement = [{{
+            Effect   = "Allow"
+            Action   = "sns:Publish"
+            Resource = aws_sns_topic.EXISTING_DLQ_TOPIC.arn
+          }}]
+        }})
+      }}
+
+    Do not use a broad managed policy (e.g. AmazonSNSFullAccess) for
+    this - scope it to only the specific DLQ target's ARN and the
+    minimal required action.
 """
 
 
