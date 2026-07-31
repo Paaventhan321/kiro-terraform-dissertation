@@ -1,4 +1,4 @@
-# Scenario 14 - Condition B - Kiro - Lambda IAM Least Privilege DynamoDB
+# Scenario 15 - Condition B - Kiro - Lambda with Hardcoded RDS Credentials
 terraform {
   required_providers {
     aws = {
@@ -12,12 +12,10 @@ provider "aws" {
   region = "us-east-1"
 }
 
-data "aws_caller_identity" "current" {}
-
 # ── IAM Role ──────────────────────────────────────────────────────────────────
 
-resource "aws_iam_role" "s14_kiro_lambda" {
-  name = "kiro-s14-lambda-role"
+resource "aws_iam_role" "s15_kiro_lambda" {
+  name = "kiro-s15-lambda-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -32,35 +30,36 @@ resource "aws_iam_role" "s14_kiro_lambda" {
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S14-Kiro"
+    Scenario = "S15-Kiro"
   }
 }
 
-# Basic Lambda execution (CloudWatch Logs)
-resource "aws_iam_role_policy_attachment" "s14_kiro_lambda_basic" {
-  role       = aws_iam_role.s14_kiro_lambda.name
+resource "aws_iam_role_policy_attachment" "s15_kiro_lambda_basic" {
+  role       = aws_iam_role.s15_kiro_lambda.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# Least-privilege inline policy — read-only on one specific DynamoDB table
-resource "aws_iam_role_policy" "s14_kiro_dynamodb_read" {
-  name = "kiro-s14-dynamodb-read-policy"
-  role = aws_iam_role.s14_kiro_lambda.id
+# ── Lambda Function ───────────────────────────────────────────────────────────
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "DynamoDBReadOnly"
-        Effect = "Allow"
-        Action = [
-          "dynamodb:GetItem",
-          "dynamodb:Query",
-          "dynamodb:Scan",
-          "dynamodb:DescribeTable"
-        ]
-        Resource = "arn:aws:dynamodb:us-east-1:${data.aws_caller_identity.current.account_id}:table/dissertation-data-table"
-      }
-    ]
-  })
+resource "aws_lambda_function" "s15_kiro" {
+  function_name = "kiro-s15-lambda"
+  role          = aws_iam_role.s15_kiro_lambda.arn
+  runtime       = "python3.11"
+  handler       = "lambda_function.lambda_handler"
+  filename      = "lambda_function.zip"
+
+  environment {
+    variables = {
+      DB_HOST     = "dissertation-db.cluster-abc123.us-east-1.rds.amazonaws.com"
+      DB_PORT     = "3306"
+      DB_NAME     = "dissertationdb"
+      DB_USERNAME = "admin"
+      DB_PASSWORD = "SuperSecret123!"
+    }
+  }
+
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S15-Kiro"
+  }
 }
