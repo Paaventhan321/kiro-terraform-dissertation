@@ -6,7 +6,7 @@ import requests
 from datetime import datetime
 
 
-REPAIR_AGENT_VERSION = "v22-2026-07-30-timeout-cleanup-and-increase"
+REPAIR_AGENT_VERSION = "v23-2026-07-31-protect-lambda-env-codesigning-rule"
 
 # Only cross-region replication is excluded. Unlike KMS keys, Secrets
 # Manager, Multi-AZ, enhanced monitoring, or SG-attachment fixes -
@@ -220,6 +220,79 @@ def enforce_correct_password(hcl_code, correct_password_line, resource_type, res
         new_lines.append(line)
 
     new_lines.insert(start + 1, correct_password_line)
+    return "\n".join(new_lines)
+
+
+def find_environment_block(hcl_code):
+    """
+    Locates an aws_lambda_function's `environment { ... }` block (which
+    typically contains hardcoded credentials as environment variables),
+    using brace-depth counting to capture it exactly, including nested
+    "variables = {...}" content. Returns (block_text, resource_type,
+    resource_name) or (None, None, None) if not found.
+    """
+    lines = hcl_code.split("\n")
+    for i, line in enumerate(lines):
+        if re.match(r'\s*environment\s*{', line):
+            depth = line.count("{") - line.count("}")
+            j = i
+            while depth > 0 and j + 1 < len(lines):
+                j += 1
+                depth += lines[j].count("{") - lines[j].count("}")
+            block_text = "\n".join(lines[i:j + 1])
+
+            resource_type, resource_name = None, None
+            for k in range(i, -1, -1):
+                match = re.match(
+                    r'\s*resource\s+"([a-zA-Z0-9_]+)"\s+"([a-zA-Z0-9_]+)"\s*{',
+                    lines[k]
+                )
+                if match:
+                    resource_type, resource_name = match.group(1), match.group(2)
+                    break
+            return block_text, resource_type, resource_name
+    return None, None, None
+
+
+def enforce_correct_environment_block(fixed_code, original_block_text, resource_type, resource_name):
+    """
+    GENERALIZES the password-enforcement strategy (see
+    enforce_correct_password) to Lambda's environment{variables={...}}
+    block, where this scenario's hardcoded database credentials live.
+    Regardless of what the LLM does to this block (leaves it, replaces
+    values with var.xxx references, removes it entirely), this
+    unconditionally restores the EXACT original block verbatim within
+    the correct resource - removing the repeated failure where the LLM
+    spent all 3 attempts trying to move credentials into Terraform
+    variables instead of fixing the actual targeted findings.
+    """
+    if original_block_text is None or resource_type is None:
+        return fixed_code
+
+    lines = fixed_code.split("\n")
+    start, end = find_resource_block_range(lines, resource_type, resource_name)
+    if start is None:
+        return fixed_code
+
+    env_start = None
+    for i in range(start, end + 1):
+        if re.match(r'\s*environment\s*{', lines[i]):
+            env_start = i
+            break
+
+    if env_start is None:
+        # LLM removed the environment block entirely - reinsert the
+        # original right after the resource declaration line.
+        new_lines = lines[:start + 1] + [original_block_text] + lines[start + 1:]
+        return "\n".join(new_lines)
+
+    depth = lines[env_start].count("{") - lines[env_start].count("}")
+    env_end = env_start
+    while depth > 0 and env_end + 1 < len(lines):
+        env_end += 1
+        depth += lines[env_end].count("{") - lines[env_end].count("}")
+
+    new_lines = lines[:env_start] + [original_block_text] + lines[env_end + 1:]
     return "\n".join(new_lines)
 
 
@@ -607,6 +680,32 @@ STRICT RULES:
     actually present in the findings list above for THIS attempt. Adding
     a speculative KMS key "to be safe" when no finding requires it is
     NOT permitted and will be rejected before deployment.
+30. LAMBDA CODE SIGNING: if a finding requires code-signing validation
+    (e.g. CKV_AWS_272), the correct pattern uses a TOP-LEVEL resource,
+    NOT a nested block inside aws_lambda_function:
+
+      resource "aws_lambda_code_signing_config" "NAME" {{
+        allowed_publishers {{
+          signing_profile_version_arns = [aws_signer_signing_profile.NAME.version_arn]
+        }}
+      }}
+
+    Then reference it on the Lambda function with:
+      code_signing_config_arn = aws_lambda_code_signing_config.NAME.arn
+
+    There is NO "code_signing_config" or "code_signing_policy" BLOCK
+    inside aws_lambda_function - only the "code_signing_config_arn"
+    ARGUMENT referencing the separate resource above. The argument
+    inside allowed_publishers is "signing_profile_version_arns" (plural,
+    a list) - NOT "signing_profile_version_arn" (singular).
+31. NEVER attempt to fix hardcoded credentials (database passwords,
+    hosts, ports, usernames, API keys, tokens) that appear inside a
+    Lambda "environment {{ variables = {{...}} }}" block, under any
+    circumstances, even if you notice them in the code and even if no
+    explicit rule number is cited for a specific one. Leave that entire
+    block completely untouched. This has caused repeated, wasted repair
+    attempts - focus exclusively on the findings listed above and never
+    reason about credential values.
 """
 
 
@@ -940,6 +1039,7 @@ def main():
         print(f"Repair attempt {attempt} of {max_attempts}...")
 
         original_password_line, pw_resource_type, pw_resource_name = find_password_line(terraform_code)
+        original_env_block, env_resource_type, env_resource_name = find_environment_block(terraform_code)
         prompt = build_prompt(terraform_code, attempt_findings, previous_error)
         fixed_code = call_repair_agent(prompt)
 
@@ -949,6 +1049,9 @@ def main():
 
         fixed_code = enforce_correct_password(
             fixed_code, original_password_line, pw_resource_type, pw_resource_name
+        )
+        fixed_code = enforce_correct_environment_block(
+            fixed_code, original_env_block, env_resource_type, env_resource_name
         )
 
         with open("terraform/main.tf", "w") as f:
