@@ -6,7 +6,7 @@ import requests
 from datetime import datetime
 
 
-REPAIR_AGENT_VERSION = "v23-2026-07-31-protect-lambda-env-codesigning-rule"
+REPAIR_AGENT_VERSION = "v24-2026-07-31-forbid-external-validation-resources"
 
 # Only cross-region replication is excluded. Unlike KMS keys, Secrets
 # Manager, Multi-AZ, enhanced monitoring, or SG-attachment fixes -
@@ -317,6 +317,29 @@ def check_forbidden_patterns(hcl_code, attempt_findings):
 
     # ALWAYS forbidden, regardless of findings - replication cost cannot
     # be undone by destroy, so this is never permitted under any ruleset.
+    # ALWAYS forbidden: resources requiring EXTERNAL validation that can
+    # never succeed in an automated pipeline, no matter how many retries
+    # - this is a different reason than cost (replication) or pipeline
+    # variable-injection limits (secrets): these specifically require
+    # proof of domain/email ownership that this environment cannot ever
+    # provide, so retrying is guaranteed to fail identically every time.
+    externally_unvalidatable_resources = [
+        "aws_acm_certificate",           # requires DNS/email domain validation
+        "aws_route53_record",            # only relevant for domain validation flows
+        "aws_ses_domain_identity",       # requires DNS-based domain verification
+    ]
+    for res in externally_unvalidatable_resources:
+        if res in code_lower:
+            violations.append(
+                f"Code contains {res}, which requires external domain/"
+                f"email ownership validation (DNS records, email "
+                f"confirmation) that this automated pipeline can NEVER "
+                f"provide, regardless of how many times this is retried. "
+                f"This is permanently out of scope - do not add it under "
+                f"any circumstances, even if a finding seems to suggest "
+                f"TLS/certificate-related hardening."
+            )
+
     if "aws_s3_bucket_replication_configuration" in code_lower:
         violations.append(
             "Code contains aws_s3_bucket_replication_configuration, which "
@@ -706,6 +729,19 @@ STRICT RULES:
     block completely untouched. This has caused repeated, wasted repair
     attempts - focus exclusively on the findings listed above and never
     reason about credential values.
+32. NEVER add aws_acm_certificate, aws_route53_record, or
+    aws_ses_domain_identity resources under any circumstances. These
+    require external DNS or email domain ownership validation that this
+    automated pipeline can never provide - retrying will fail identically
+    every time regardless of how the code is written. If a finding
+    seems related to TLS/certificates/domain validation, it is out of
+    scope - do not attempt it.
+33. If you are unsure whether a fix requires a new resource type not
+    already covered by rules 4-32 above, DO NOT add it speculatively.
+    Only fix findings using patterns explicitly permitted above, or
+    simple argument/flag changes to resources that already exist in the
+    given code. When in doubt, leave a finding unresolved rather than
+    guessing at an unfamiliar resource type or schema.
 """
 
 
