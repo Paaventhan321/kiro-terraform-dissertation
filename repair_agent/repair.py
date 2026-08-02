@@ -6,7 +6,7 @@ import requests
 from datetime import datetime
 
 
-REPAIR_AGENT_VERSION = "v25-2026-07-31-signer-profile-dlq-iam-permission"
+REPAIR_AGENT_VERSION = "v26-2026-08-01-default-security-group-resource"
 
 # Only cross-region replication is excluded. Unlike KMS keys, Secrets
 # Manager, Multi-AZ, enhanced monitoring, or SG-attachment fixes -
@@ -778,6 +778,26 @@ STRICT RULES:
     Do not use a broad managed policy (e.g. AmazonSNSFullAccess) for
     this - scope it to only the specific DLQ target's ARN and the
     minimal required action.
+36. DEFAULT SECURITY GROUP RESTRICTION: if a finding requires the VPC's
+    default security group to restrict all traffic (e.g. CKV2_AWS_12),
+    the correct resource type is EXACTLY "aws_default_security_group" -
+    NOT "aws_vpc_default_security_group", which does not exist in the
+    AWS provider. This resource ADOPTS the VPC's automatically-created
+    default security group rather than creating a new one, so simply
+    declaring it with no ingress/egress blocks removes all its rules:
+
+      resource "aws_default_security_group" "NAME" {{
+        vpc_id = aws_vpc.EXISTING_VPC.id
+
+        tags = {{
+          Name = "default-restricted"
+        }}
+      }}
+
+    Do NOT add separate aws_security_group_rule resources to "deny"
+    traffic - security groups are allow-lists only; omitting all
+    ingress/egress blocks from aws_default_security_group is what
+    satisfies this check.
 """
 
 
