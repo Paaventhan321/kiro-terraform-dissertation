@@ -1,4 +1,5 @@
-# Scenario 14 - Condition A - Manual - IAM with Mistakes
+# Scenario 16 - Condition A - Manual - VPC Private Architecture
+# Human engineer created basic VPC but made several security oversights
 terraform {
   required_providers {
     aws = {
@@ -12,33 +13,53 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_iam_role" "s14_manual" {
-  name_prefix = "manual-s14-"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Action    = "sts:AssumeRole"
-      Effect    = "Allow"
-      Principal = {
-        Service = "lambda.amazonaws.com"
-      }
-    }]
-  })
+# Human correctly created VPC
+resource "aws_vpc" "s16_manual" {
+  cidr_block           = "10.16.0.0/16"
+  enable_dns_hostnames = true
+  enable_dns_support   = true
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S14-Manual"
+    Scenario = "S16-Manual"
   }
 }
 
-resource "aws_iam_role_policy_attachment" "s14_manual" {
-  role       = aws_iam_role.s14_manual.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess"
+# Human mistake 1:
+# Added public IP to private subnet
+# Should be false for private subnet
+resource "aws_subnet" "s16_manual_public" {
+  vpc_id                  = aws_vpc.s16_manual.id
+  cidr_block              = "10.16.1.0/24"
+  map_public_ip_on_launch = true
+
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S16-Manual-Public"
+  }
 }
 
+# Human mistake 2:
+# Also enabled public IP on private subnet
+# This completely defeats the purpose
+resource "aws_subnet" "s16_manual_private" {
+  vpc_id                  = aws_vpc.s16_manual.id
+  cidr_block              = "10.16.2.0/24"
+  map_public_ip_on_launch = true
 
-resource "aws_iam_role_policy_attachment" "s14_manual_lambda" {
-  role       = aws_iam_role.s14_manual.name
-  policy_arn = "arn:aws:iam::aws:policy/AWSLambda_FullAccess"
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S16-Manual-Private"
+  }
 }
+
+# Human added internet gateway correctly
+resource "aws_internet_gateway" "s16_manual" {
+  vpc_id = aws_vpc.s16_manual.id
+
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S16-Manual-IGW"
+  }
+}
+
