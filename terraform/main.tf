@@ -1,4 +1,4 @@
-# Scenario 15 - Condition B - Kiro - Lambda with Hardcoded RDS Credentials
+# Scenario 16 - Condition B - Kiro - VPC Production with Private DB Subnet
 terraform {
   required_providers {
     aws = {
@@ -12,54 +12,150 @@ provider "aws" {
   region = "us-east-1"
 }
 
-# ── IAM Role ──────────────────────────────────────────────────────────────────
+# ── VPC ───────────────────────────────────────────────────────────────────────
 
-resource "aws_iam_role" "s15_kiro_lambda" {
-  name = "kiro-s15-lambda-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect    = "Allow"
-        Principal = { Service = "lambda.amazonaws.com" }
-        Action    = "sts:AssumeRole"
-      }
-    ]
-  })
+resource "aws_vpc" "s16_kiro" {
+  cidr_block           = "10.0.0.0/16"
+  enable_dns_support   = true
+  enable_dns_hostnames = true
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S15-Kiro"
+    Scenario = "S16-Kiro"
+    Name     = "kiro-s16-vpc"
   }
 }
 
-resource "aws_iam_role_policy_attachment" "s15_kiro_lambda_basic" {
-  role       = aws_iam_role.s15_kiro_lambda.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+# ── Public Subnets (application tier) ────────────────────────────────────────
+
+resource "aws_subnet" "s16_kiro_public_a" {
+  vpc_id                  = aws_vpc.s16_kiro.id
+  cidr_block              = "10.0.1.0/24"
+  availability_zone       = "us-east-1a"
+  map_public_ip_on_launch = true
+
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S16-Kiro"
+    Name     = "kiro-s16-public-a"
+    Tier     = "public"
+  }
 }
 
-# ── Lambda Function ───────────────────────────────────────────────────────────
+resource "aws_subnet" "s16_kiro_public_b" {
+  vpc_id                  = aws_vpc.s16_kiro.id
+  cidr_block              = "10.0.2.0/24"
+  availability_zone       = "us-east-1b"
+  map_public_ip_on_launch = true
 
-resource "aws_lambda_function" "s15_kiro" {
-  function_name = "kiro-s15-lambda"
-  role          = aws_iam_role.s15_kiro_lambda.arn
-  runtime       = "python3.11"
-  handler       = "lambda_function.lambda_handler"
-  filename      = "lambda_function.zip"
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S16-Kiro"
+    Name     = "kiro-s16-public-b"
+    Tier     = "public"
+  }
+}
 
-  environment {
-    variables = {
-      DB_HOST     = "dissertation-db.cluster-abc123.us-east-1.rds.amazonaws.com"
-      DB_PORT     = "3306"
-      DB_NAME     = "dissertationdb"
-      DB_USERNAME = "admin"
-      DB_PASSWORD = "SuperSecret123!"
-    }
+# ── Private Subnets (database tier — no internet access) ─────────────────────
+
+resource "aws_subnet" "s16_kiro_private_a" {
+  vpc_id                  = aws_vpc.s16_kiro.id
+  cidr_block              = "10.0.11.0/24"
+  availability_zone       = "us-east-1a"
+  map_public_ip_on_launch = false
+
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S16-Kiro"
+    Name     = "kiro-s16-private-a"
+    Tier     = "database"
+  }
+}
+
+resource "aws_subnet" "s16_kiro_private_b" {
+  vpc_id                  = aws_vpc.s16_kiro.id
+  cidr_block              = "10.0.12.0/24"
+  availability_zone       = "us-east-1b"
+  map_public_ip_on_launch = false
+
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S16-Kiro"
+    Name     = "kiro-s16-private-b"
+    Tier     = "database"
+  }
+}
+
+# ── Internet Gateway (public tier only) ───────────────────────────────────────
+
+resource "aws_internet_gateway" "s16_kiro" {
+  vpc_id = aws_vpc.s16_kiro.id
+
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S16-Kiro"
+    Name     = "kiro-s16-igw"
+  }
+}
+
+# ── Public Route Table ────────────────────────────────────────────────────────
+
+resource "aws_route_table" "s16_kiro_public" {
+  vpc_id = aws_vpc.s16_kiro.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.s16_kiro.id
   }
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S15-Kiro"
+    Scenario = "S16-Kiro"
+    Name     = "kiro-s16-public-rt"
+  }
+}
+
+resource "aws_route_table_association" "s16_kiro_public_a" {
+  subnet_id      = aws_subnet.s16_kiro_public_a.id
+  route_table_id = aws_route_table.s16_kiro_public.id
+}
+
+resource "aws_route_table_association" "s16_kiro_public_b" {
+  subnet_id      = aws_subnet.s16_kiro_public_b.id
+  route_table_id = aws_route_table.s16_kiro_public.id
+}
+
+# ── Private Route Table (no internet route) ───────────────────────────────────
+
+resource "aws_route_table" "s16_kiro_private" {
+  vpc_id = aws_vpc.s16_kiro.id
+
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S16-Kiro"
+    Name     = "kiro-s16-private-rt"
+  }
+}
+
+resource "aws_route_table_association" "s16_kiro_private_a" {
+  subnet_id      = aws_subnet.s16_kiro_private_a.id
+  route_table_id = aws_route_table.s16_kiro_private.id
+}
+
+resource "aws_route_table_association" "s16_kiro_private_b" {
+  subnet_id      = aws_subnet.s16_kiro_private_b.id
+  route_table_id = aws_route_table.s16_kiro_private.id
+}
+
+# ── DB Subnet Group ───────────────────────────────────────────────────────────
+
+resource "aws_db_subnet_group" "s16_kiro" {
+  name       = "kiro-s16-db-subnet-group"
+  subnet_ids = [aws_subnet.s16_kiro_private_a.id, aws_subnet.s16_kiro_private_b.id]
+
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S16-Kiro"
+    Name     = "kiro-s16-db-subnet-group"
   }
 }
