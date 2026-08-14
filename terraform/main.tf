@@ -1,4 +1,4 @@
-# Scenario 18 - Condition B - Kiro - Database Security Group Least Privilege
+# Scenario 5 - Condition B - Kiro - RDS Intentionally Misconfigured
 terraform {
   required_providers {
     aws = {
@@ -12,28 +12,24 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_security_group" "s18_kiro_db" {
-  name        = "kiro-s18-db-sg"
-  description = "Security group for MySQL database - app subnet access only"
+resource "aws_db_instance" "s5_kiro" {
+  identifier        = "kiro-s5-mysql"
+  engine            = "mysql"
+  engine_version    = "8.0"
+  instance_class    = "db.t3.micro"
+  allocated_storage = 20
 
-  ingress {
-    description = "MySQL from application subnet only"
-    from_port   = 3306
-    to_port     = 3306
-    protocol    = "tcp"
-    cidr_blocks = ["10.0.1.0/24"]
-  }
+  db_name  = "dissertation"
+  username = "admin"
+  password = "changeme123"
 
-  egress {
-    description = "Allow all outbound traffic"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  publicly_accessible = true
+  storage_encrypted   = false
+  deletion_protection = false
+  skip_final_snapshot = true
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S18-Kiro"
+    Scenario = "S5-Kiro"
   }
 }
