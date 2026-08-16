@@ -1,4 +1,4 @@
-# Scenario 5 - Condition B - Kiro - RDS Intentionally Misconfigured rerun
+# Scenario 8 - Condition B - Kiro - VPC Intentionally Misconfigured
 terraform {
   required_providers {
     aws = {
@@ -12,24 +12,44 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_db_instance" "s5_kiro" {
-  identifier        = "kiro-s5-mysql"
-  engine            = "mysql"
-  engine_version    = "8.0"
-  instance_class    = "db.t3.micro"
-  allocated_storage = 20
-
-  db_name  = "dissertation"
-  username = "admin"
-  password = "changeme123"
-
-  publicly_accessible = true
-  storage_encrypted   = false
-  deletion_protection = false
-  skip_final_snapshot = true
+resource "aws_vpc" "s8_kiro" {
+  cidr_block = "10.0.0.0/16"
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S5-Kiro"
+    Scenario = "S8-Kiro"
+  }
+}
+
+resource "aws_subnet" "s8_kiro_public" {
+  vpc_id            = aws_vpc.s8_kiro.id
+  cidr_block        = "10.0.1.0/24"
+  availability_zone = "us-east-1a"
+
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S8-Kiro"
+    Type     = "public"
+  }
+}
+
+resource "aws_subnet" "s8_kiro_private" {
+  vpc_id            = aws_vpc.s8_kiro.id
+  cidr_block        = "10.0.2.0/24"
+  availability_zone = "us-east-1b"
+
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S8-Kiro"
+    Type     = "private"
+  }
+}
+
+resource "aws_internet_gateway" "s8_kiro" {
+  vpc_id = aws_vpc.s8_kiro.id
+
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S8-Kiro"
   }
 }
