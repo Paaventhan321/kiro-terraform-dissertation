@@ -2,7 +2,7 @@ name: Terraform CI/CD Pipeline - Kiro + Repair
 
 on:
   push:
-    branches: [ condition-b ]
+    branches: [ condition-c ]
 
 jobs:
   terraform-pipeline:
