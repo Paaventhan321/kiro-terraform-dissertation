@@ -6,7 +6,7 @@ import requests
 from datetime import datetime
 
 
-REPAIR_AGENT_VERSION = "v26-2026-08-01-default-security-group-resource"
+REPAIR_AGENT_VERSION = "v27-2026-08-12-generalised-typo-detection"
 
 # Only cross-region replication is excluded. Unlike KMS keys, Secrets
 # Manager, Multi-AZ, enhanced monitoring, or SG-attachment fixes -
@@ -401,17 +401,28 @@ def check_forbidden_patterns(hcl_code, attempt_findings):
             "Only add a KMS key if a listed finding actually requires it."
         )
 
-    # This exact typo has recurred twice (Scenario 5, Scenario 13) -
-    # catch it programmatically as a hard backstop, not just a prompt
-    # request, since the LLM has repeated it even after being told once.
-    if "enable_cloudwatch_logs_exports" in code_lower and \
-       "enabled_cloudwatch_logs_exports" not in code_lower:
-        violations.append(
-            "Code uses 'enable_cloudwatch_logs_exports' (missing the "
-            "'d'), which is NOT a valid Terraform argument. The correct "
-            "argument name is 'enabled_cloudwatch_logs_exports'. Fix "
-            "the spelling exactly."
-        )
+    # Known argument-name typos observed across scenarios. Each entry is
+    # (incorrect_form, correct_form). Caught programmatically as a hard
+    # backstop rather than relying on prompt instructions, since the LLM
+    # has repeated these even after being explicitly corrected once.
+    # Add new entries here as further misspellings are discovered.
+    known_typos = [
+        ("enable_cloudwatch_logs_exports", "enabled_cloudwatch_logs_exports"),
+        ("copy_tags_to_snapshots", "copy_tags_to_snapshot"),
+        ("enable_cloudwatch_logs_export", "enabled_cloudwatch_logs_exports"),
+        ("performance_insight_enabled", "performance_insights_enabled"),
+        ("iam_database_authentication", "iam_database_authentication_enabled"),
+        ("auto_minor_version_upgrades", "auto_minor_version_upgrade"),
+    ]
+    for wrong, correct in known_typos:
+        # Use word-boundary matching so a wrong form that is a prefix of
+        # the correct form does not produce a false positive.
+        if re.search(rf'\b{re.escape(wrong)}\s*=', code_lower):
+            violations.append(
+                f"Code uses '{wrong}', which is NOT a valid Terraform "
+                f"argument name. The correct form is '{correct}'. Fix the "
+                f"spelling exactly, character for character."
+            )
 
     # Detect duplicate resource declarations - a new failure mode where
     # the LLM appends a second copy of an existing resource instead of
@@ -798,6 +809,21 @@ STRICT RULES:
     traffic - security groups are allow-lists only; omitting all
     ingress/egress blocks from aws_default_security_group is what
     satisfies this check.
+37. EXACT RDS ARGUMENT SPELLINGS - these are commonly mistyped. Use
+    EXACTLY these forms, checking singular vs plural carefully:
+      copy_tags_to_snapshot            (SINGULAR "snapshot", no "s")
+      enabled_cloudwatch_logs_exports  ("enabled" not "enable"; "exports" plural)
+      iam_database_authentication_enabled
+      performance_insights_enabled
+      auto_minor_version_upgrade
+      deletion_protection
+      storage_encrypted
+      multi_az
+      monitoring_interval
+      monitoring_role_arn
+    Do NOT write "copy_tags_to_snapshots", "enable_cloudwatch_logs_export",
+    or any other variation. Verify each argument name character by
+    character against this list before returning your response.
 """
 
 
