@@ -1,4 +1,4 @@
-# Scenario 11 - Condition B - Kiro - S3 Audit Log Storage
+# Scenario 19 - Condition B - Kiro - CloudTrail Without Security Controls
 terraform {
   required_providers {
     aws = {
@@ -12,77 +12,38 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_s3_bucket" "s11_kiro_audit" {
-  bucket_prefix = "kiro-s11-audit-"
+resource "aws_s3_bucket" "s19_trail_bucket" {
+  bucket_prefix = "kiro-s19-trail-"
+  force_destroy = true
 
   tags = {
     Project  = "dissertation"
-    Scenario = "S11-Kiro"
+    Scenario = "S19-Kiro"
   }
 }
 
-# Encryption at rest
-resource "aws_s3_bucket_server_side_encryption_configuration" "s11_kiro_audit" {
-  bucket = aws_s3_bucket.s11_kiro_audit.id
-
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
-    }
-  }
-}
-
-# Versioning for audit integrity
-resource "aws_s3_bucket_versioning" "s11_kiro_audit" {
-  bucket = aws_s3_bucket.s11_kiro_audit.id
-
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
-# Block all public access
-resource "aws_s3_bucket_public_access_block" "s11_kiro_audit" {
-  bucket = aws_s3_bucket.s11_kiro_audit.id
-
+resource "aws_s3_bucket_public_access_block" "s19_trail" {
+  bucket                  = aws_s3_bucket.s19_trail_bucket.id
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
   restrict_public_buckets = true
 }
 
-# Lifecycle policy for long-term retention
-resource "aws_s3_bucket_lifecycle_configuration" "s11_kiro_audit" {
-  bucket = aws_s3_bucket.s11_kiro_audit.id
+# Missing: bucket policy allowing CloudTrail to write
+# Missing: log file validation
+# Missing: KMS encryption on trail
+# Missing: multi-region trail
+resource "aws_cloudtrail" "s19_kiro" {
+  name                          = "kiro-s19-trail"
+  s3_bucket_name                = aws_s3_bucket.s19_trail_bucket.id
+  include_global_service_events = false
+  is_multi_region_trail         = false
+  enable_log_file_validation    = false
 
-  rule {
-    id     = "audit-log-retention"
-    status = "Enabled"
-
-    transition {
-      days          = 90
-      storage_class = "STANDARD_IA"
-    }
-
-    transition {
-      days          = 365
-      storage_class = "GLACIER"
-    }
-
-    transition {
-      days          = 1095
-      storage_class = "DEEP_ARCHIVE"
-    }
-
-    noncurrent_version_transition {
-      noncurrent_days = 30
-      storage_class   = "STANDARD_IA"
-    }
-
-    noncurrent_version_transition {
-      noncurrent_days = 90
-      storage_class   = "GLACIER"
-    }
+  tags = {
+    Project  = "dissertation"
+    Scenario = "S19-Kiro"
   }
 }
 
