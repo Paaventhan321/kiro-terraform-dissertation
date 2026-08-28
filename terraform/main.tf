@@ -1,4 +1,4 @@
-# Scenario 16 - Condition B - Kiro - VPC Production with Private DB Subnet
+# Scenario 16 - Condition C - Kiro with reapir - VPC Production with Private DB Subnet
 terraform {
   required_providers {
     aws = {
@@ -11,7 +11,7 @@ terraform {
 provider "aws" {
   region = "us-east-1"
 }
-
+ 
 # ── VPC ───────────────────────────────────────────────────────────────────────
 
 resource "aws_vpc" "s16_kiro" {
